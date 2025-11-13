@@ -132,7 +132,7 @@ for t = 1:params.steps
         [decision, result] = decison_module(pos, vel, params, a_ac, a_h);
 %         display(result)
 
-        prev_seq = a_h; % by sanaz; in some instances the first reference to prev_seq it is empty
+        % prev_seq = a_h; % by sanaz; in some instances the first reference to prev_seq it is empty
 
         if mde == 1
             if decision
@@ -234,7 +234,7 @@ traj.bb_orient = bb_orient;
 traj.result = rslt;
 traj.policy = policy;
 
-displayTraj(x,y,vx,vy); title('Black-Box Simplex', 'FontSize', 17);
+displayTraj(x,y,vx,vy,policy); title('Black-Box Simplex', 'FontSize', 17);
 set(gcf, 'Position', get(0, 'Screensize'));
 % saveas(gcf, ['Images/trajComparison_' num2str(i) '.jpg']);
 
