@@ -54,7 +54,7 @@ BB_fail_pause_duration = 0;
 %% Data source
 traj_num = 1; 
 %traj_path = 'C:\Users\sanaz\Documents\Projects\BB-simplex-master\traj\traj_bb [2022-11-09]';
-traj_path = 'traj\traj_bb [2023-01-24]_1'; % 15 agent simple
+traj_path = 'traj\traj_bb [2023-01-24]_1'; % 15 agent simple COMMENT by lzj: 这个路径是运行main_bb_reverse之后数据保存的路径，每次都要手动修改
 
 
 

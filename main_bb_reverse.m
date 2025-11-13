@@ -132,7 +132,7 @@ for t = 1:params.steps
         [decision, result] = decison_module(pos, vel, params, a_ac, a_h);
 %         display(result)
 
-        %prev_seq = a_h; % by sanaz; in some instances the first reference to prev_seq it is empty
+        prev_seq = a_h; % by sanaz; in some instances the first reference to prev_seq it is empty
 
         if mde == 1
             if decision
@@ -141,7 +141,7 @@ for t = 1:params.steps
                 action_number = min(bc_counter, size(prev_seq, 3));
 
                 %acc = prev_seq(:,:,action_number);                    
-                [acc, prev_seq] = resolve_collision(result, pos, vel, params, prev_seq, a_ac, a_h, action_number);
+                [acc, prev_seq] = resolve_collision(result, pos, vel, params, prev_seq, a_ac, a_h, action_number, t);
 
                 bc_counter = bc_counter + 1;
 
@@ -161,7 +161,7 @@ for t = 1:params.steps
                 action_number = min(bc_counter, size(prev_seq, 3));
                 
                 %acc = prev_seq(:,:,action_number)';
-                [acc, prev_seq] = resolve_collision(result, pos, vel, params, prev_seq, a_ac, a_h, action_number);
+                [acc, prev_seq] = resolve_collision(result, pos, vel, params, prev_seq, a_ac, a_h, action_number, t);
 
                 bc_counter = bc_counter + 1;
 
