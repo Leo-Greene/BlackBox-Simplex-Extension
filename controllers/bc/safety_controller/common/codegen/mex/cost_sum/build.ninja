@@ -1,0 +1,54 @@
+# CompilerName=clang
+# Mode=optim
+ninja_required_version = 1.3
+
+# Basic folders
+root = .
+builddir = $root/build/maci64
+matlabdir = /Applications/MATLAB_R2019b.app
+startdir = /Users/Usama/UmehmoodGoogle/Work/Code/Swarms New/MPCQP/controller_cmpc_2d/common
+
+# Toolchain information
+cc = /usr/bin/xcrun -sdk macosx10.15 clang
+cxx = /usr/bin/xcrun -sdk macosx10.15 clang++
+linker = /usr/bin/xcrun -sdk macosx10.15 clang
+linkerxx = /usr/bin/xcrun -sdk macosx10.15 clang++
+
+cflags =  -fno-common -arch x86_64 -mmacosx-version-min=10.9 -fexceptions -isysroot /Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX10.15.sdk -DMATLAB_MEX_FILE -O2 -fwrapv -DNDEBUG -std=c99 -I "$root" -I "$startdir" -I "$root/interface" -I "$matlabdir/extern/include" -I "$matlabdir/simulink/include" -I "$matlabdir/rtw/c/src" -I "$matlabdir/rtw/c/src/ext_mode/common" -I "$matlabdir/rtw/c/ert" -I "." -DMODEL=cost_sum -DHAVESTDIO -DUSE_RTMODEL -DUNIX -c 
+
+cxxflags =  -fno-common -arch x86_64 -mmacosx-version-min=10.9 -fexceptions -isysroot /Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX10.15.sdk -fobjc-arc -std=c++11 -stdlib=libc++ -DMATLAB_MEX_FILE -O2 -fwrapv -DNDEBUG -std=c++11 -I "$root" -I "$startdir" -I "$root/interface" -I "$matlabdir/extern/include" -I "$matlabdir/simulink/include" -I "$matlabdir/rtw/c/src" -I "$matlabdir/rtw/c/src/ext_mode/common" -I "$matlabdir/rtw/c/ert" -I "." -DMODEL=cost_sum -DHAVESTDIO -DUSE_RTMODEL -DUNIX -c 
+
+ldflags =  -Wl,-twolevel_namespace -undefined error -arch x86_64 -mmacosx-version-min=10.9 -Wl,-syslibroot,/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX10.15.sdk -bundle   -L"$matlabdir/bin/maci64" -lmx -lmex -lmat -lc++  -Wl,-rpath,@loader_path -o cost_sum.mexmaci64 -lemlrt -lcovrt -lut -lmwmathutil  -Wl,-exported_symbols_list,cost_sum.map
+
+# Build Rules
+rule cc
+    command = $cc $cflags $in -o $out
+
+rule cxx
+    command = $cxx $cxxflags $in -o $out
+
+rule link
+    command = $linker $in $ldflags
+
+rule linkxx
+    command = $linkerxx $in $ldflags
+
+# Build
+build $builddir/rt_nonfinite.o : cc $root/rt_nonfinite.c
+build $builddir/cost_sum_data.o : cc $root/cost_sum_data.c
+build $builddir/cost_sum_initialize.o : cc $root/cost_sum_initialize.c
+build $builddir/cost_sum_terminate.o : cc $root/cost_sum_terminate.c
+build $builddir/cost_sum.o : cc $root/cost_sum.c
+build $builddir/u2acc.o : cc $root/u2acc.c
+build $builddir/eml_int_forloop_overflow_check.o : cc $root/eml_int_forloop_overflow_check.c
+build $builddir/dynamics.o : cc $root/dynamics.c
+build $builddir/fitness.o : cc $root/fitness.c
+build $builddir/predator_avoidance.o : cc $root/predator_avoidance.c
+build $builddir/_coder_cost_sum_api.o : cc $root/interface/_coder_cost_sum_api.c
+build $builddir/_coder_cost_sum_mex.o : cc $root/interface/_coder_cost_sum_mex.c
+build $builddir/cost_sum_emxutil.o : cc $root/cost_sum_emxutil.c
+build $builddir/_coder_cost_sum_info.o : cc $root/interface/_coder_cost_sum_info.c
+build $builddir/c_mexapi_version.o : cc $matlabdir/extern/version/c_mexapi_version.c
+
+# Link
+build $root/cost_sum.mexmaci64 : link $builddir/rt_nonfinite.o $builddir/cost_sum_data.o $builddir/cost_sum_initialize.o $builddir/cost_sum_terminate.o $builddir/cost_sum.o $builddir/u2acc.o $builddir/eml_int_forloop_overflow_check.o $builddir/dynamics.o $builddir/fitness.o $builddir/predator_avoidance.o $builddir/_coder_cost_sum_api.o $builddir/_coder_cost_sum_mex.o $builddir/cost_sum_emxutil.o $builddir/_coder_cost_sum_info.o $builddir/c_mexapi_version.o 

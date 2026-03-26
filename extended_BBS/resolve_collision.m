@@ -8,6 +8,17 @@ counter = 0;
 visited = false(1, params.n);
 switch_step = params.switch_step;
 
+if isempty(prev_seq)
+    % Defensive fallback: if there is no previous sequence, issue zero command.
+    acc_out = zeros(size(a_ac));
+    return;
+end
+
+if nargin < 8 || isempty(action_number) || action_number < 1
+    action_number = 1;
+end
+action_number = min(action_number, size(prev_seq, 3));
+
 while(decision)
     
     c1 = int64(result.pair(1));

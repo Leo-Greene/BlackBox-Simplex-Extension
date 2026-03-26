@@ -1,0 +1,52 @@
+# MATLAB
+*.asv
+*.m~
+*.slxc
+*.mex*
+*.log
+slprj/
+_out/
+experiment/integration/out/*/
+experiment/integration/out/20*
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+.venv
+venv/
+ENV/
+.env
+
+# Data and Artifacts
+# 忽略采集的轨迹数据，只保留结构 (如果需要)
+traj/step3_collect/20*
+!traj/step3_collect/.gitkeep
+
+# 忽略训练输出的模型和日志
+experiment/train/out/20*
+experiment/train/out/*.pt
+experiment/train/out/*.onnx
+experiment/train/out/*.json
+
+# OS
+.DS_Store
+Thumbs.db
+
+# VS Code
+.vscode/
+.qoder/
+*.code-workspace
+
+# backup
+backup/
+
+# docs
+docs/
+
+# experiment
+experiment/dynamics/legacy_support/
+experiment/other/
+
+# other
+traj/check_mat.ipynb

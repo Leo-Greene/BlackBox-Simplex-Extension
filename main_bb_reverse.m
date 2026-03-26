@@ -1,15 +1,16 @@
 clc
-clear all
+clear
 close all
 
 %% Dependencies
 % root = '/Users/Usama/UmehmoodGoogle/Work/Code/';
 
-addpath(genpath('safety_controller'));
-addpath(genpath('controller_cmpc_2d'));
+addpath(genpath('controllers/ac/controller_cmpc_2d'));
+addpath(genpath('controllers/bc/safety_controller'));
 addpath(genpath('decision_module'));
 addpath(genpath('extended_BBS'));
 addpath('common');
+addpath('dynamics');
 
 
 % addpath([root 'Swarms New/m-functions']);
@@ -39,6 +40,13 @@ params.wt = 10;
 params.ws_bb = 3000; %1800
 params.w_orient = 20;
 
+% Unmodeled params in true_dynamics
+params.acc_scale = 0.95;
+params.acc_bias = 0;
+params.damping = 0.03;
+params.nonlinear_drift = false;
+params.noise_std = 0;
+
 %% Predator params
 params.predator = 0;
 params.pFactor = 1.40;
@@ -63,7 +71,7 @@ opt.FunctionTolerance = 1e-7;
 % u = zeros(2*params.n*params.h + 1,1);
 indexes = 1:params.n;
 acc = zeros(2, params.n);
-controller_run = params.ct / params.dt;
+controller_run = params.ct / params.dt; %
 zero_vec = zeros(params.n , 1) ;
 params.switch_step = params.steps;
 
@@ -111,18 +119,19 @@ f(1) = fitness(posi, params);
 decision = false;
 bc_counter = 1;
 rslt = [];
+prev_seq = []; % 初始化以防第一步就切换到 BC 模式导致报错
 %% Controller and Dynamics:
 pos = posi; vel = veli;
 prev_sol = zeros(2*params.n*params.h_ac,1);
 a_h = 0;
 tStart = tic;
-for t = 1:params.steps
+for t = 1:params.steps  % 1) run optimizer 2) update instruction 3) run dynamics
     if mod(t,5) == 0
         e = round(toc, 1);
         disp(['step: ' num2str(t) '/' num2str(params.steps) ', Time:' num2str(e) 's']);
     end
     
-    if mod(t - 1, controller_run) == 0
+    if mod(t - 1, controller_run) == 0  % run optimizer every controller_run steps
         
         [a_ac, fval, e_flag, prev_sol, history] = controller_cmpc_2d(pos, vel, params, opt);
         
@@ -134,11 +143,11 @@ for t = 1:params.steps
 
         % prev_seq = a_h; % by sanaz; in some instances the first reference to prev_seq it is empty
 
-        if mde == 1
-            if decision
+        if mde == 1 % controlled by AC
+            if decision % switch to BC: 1) update instruction 2) record switch
 
                 mde = 2;
-                action_number = min(bc_counter, size(prev_seq, 3));
+                action_number = min(bc_counter, size(prev_seq, 3)); % by lzj: saved instructions shouldn't be empty. If it is empty, run the program again
 
                 %acc = prev_seq(:,:,action_number);                    
                 [acc, prev_seq] = resolve_collision(result, pos, vel, params, prev_seq, a_ac, a_h, action_number, t);
@@ -195,7 +204,8 @@ for t = 1:params.steps
         acc = [ax(t, :); ay(t, :)];
     end
     
-    [pos, vel] = dynamics(pos, vel, acc, params);
+    %[pos, vel] = stochastic_dynamics(pos, vel, acc, params, 0.02, 0.05);
+    [pos, vel] = true_dynamics(pos, vel, acc, params);
     x(t+1,:) = pos(1,:);
     y(t+1,:) = pos(2,:);
     vx(t+1,:) = vel(1,:);

@@ -185,7 +185,7 @@ traj.bb_sp = bb_sp;
 traj.bb_orient = bb_orient;
 traj.result = result;
 
-displayTraj(x,y,vx,vy); title('Black-Box Simplex', 'FontSize', 17);
+displayTraj(x,y,vx,vy, params.switch_step); title('Black-Box Simplex', 'FontSize', 17);
 set(gcf, 'Position', get(0, 'Screensize'));
 % saveas(gcf, ['Images/trajComparison_' num2str(i) '.jpg']);
 
@@ -195,12 +195,12 @@ set(gcf, 'Position', get(0, 'Screensize'));
 date_string = datestr(datetime,' [yyyy-mm-dd]');
 out_traj_name = ['traj_bb'  date_string];
  
-dir_path = 'C:\Users\sanaz\Documents\Projects\BB-simplex-master\traj\';
+dir_path = 'D:\Coding\Project\MAS\BlackBox-Simplex-Extension\traj\'; % 输出路径
 
 [dest_path, out_traj_name] = create_dir(dir_path, out_traj_name);
 mkdir([dest_path '\Results']);
 
-fprintf(['\nOUTPUT:\n' dest_path '\n']);
+fprintf('\nOUTPUT:\n%s\n', dest_path);
 fprintf(['switch: ' num2str(params.switch_step) '\n']);
 if numel(result)
     disp(result_message(result, params.dt));

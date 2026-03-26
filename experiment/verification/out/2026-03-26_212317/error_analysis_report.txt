@@ -1,0 +1,32 @@
+====================================================
+         RESIDUAL MODEL ERROR ANALYSIS REPORT       
+         Generated on: 26-Mar-2026 21:23:23
+         Model:        d:\Coding\Project\CPS\BlackBox-Simplex-Extension\experiment\train\out\2026-03-26_212102
+         Dataset:      d:\Coding\Project\CPS\BlackBox-Simplex-Extension\traj\step3_collect\2026-03-26_180620_default\dataset_val.mat
+====================================================
+
+1. OVERALL STATISTICS:
+   - Total Samples Validated: 50
+   - Mean L2 Norm Error:      2.831059
+   - Median L2 Norm Error:    2.495023
+   - Max L2 Norm Error:       6.984532 (Worst Case)
+
+2. WORST CASE DETAIL:
+   - Sample Index in Val Set: 26
+   - L2 Norm Error:           6.984532
+   - Avg Agent Dist Error:    1.441107 m
+   - Physical Discrepancy (Ground Truth Settings From Data):
+       * acc_scale: 0.700 (Nominal: 1.000)
+       * damping:   0.150
+       * vmax:      2.000
+       * dt:        0.300
+       * n_agents:  15
+   - Suggestion: Check if this sample belongs to "boundary_focus" tag.
+
+3. ERROR DISTRIBUTION (L2 Norm):
+   - [0.0 - 0.5]: 0 samples
+   - [0.5 - 1.0]: 6 samples
+   - [1.0 - 2.0]: 11 samples
+   - [2.0 - 5.0]: 27 samples
+   - [5.0 - 10.0]: 6 samples
+   - [10.0 - 50.0]: 0 samples

@@ -1,0 +1,53 @@
+# CompilerName=clang
+# Mode=optim
+ninja_required_version = 1.3
+
+# Basic folders
+root = .
+builddir = $root/build/maci64
+matlabdir = /Applications/MATLAB_R2019b.app
+startdir = /Users/Usama/UmehmoodGoogle/Work/Code/BB-Simplex/safety_controller/common
+
+# Toolchain information
+cc = /usr/bin/xcrun -sdk macosx10.15 clang
+cxx = /usr/bin/xcrun -sdk macosx10.15 clang++
+linker = /usr/bin/xcrun -sdk macosx10.15 clang
+linkerxx = /usr/bin/xcrun -sdk macosx10.15 clang++
+
+cflags =  -fno-common -arch x86_64 -mmacosx-version-min=10.9 -fexceptions -isysroot /Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX10.15.sdk -DMATLAB_MEX_FILE -O2 -fwrapv -DNDEBUG -std=c99 -I "$root" -I "$startdir" -I "$root/interface" -I "$matlabdir/extern/include" -I "$matlabdir/simulink/include" -I "$matlabdir/rtw/c/src" -I "$matlabdir/rtw/c/src/ext_mode/common" -I "$matlabdir/rtw/c/ert" -I "." -DMODEL=constraints -DHAVESTDIO -DUSE_RTMODEL -DUNIX -c 
+
+cxxflags =  -fno-common -arch x86_64 -mmacosx-version-min=10.9 -fexceptions -isysroot /Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX10.15.sdk -fobjc-arc -std=c++11 -stdlib=libc++ -DMATLAB_MEX_FILE -O2 -fwrapv -DNDEBUG -std=c++11 -I "$root" -I "$startdir" -I "$root/interface" -I "$matlabdir/extern/include" -I "$matlabdir/simulink/include" -I "$matlabdir/rtw/c/src" -I "$matlabdir/rtw/c/src/ext_mode/common" -I "$matlabdir/rtw/c/ert" -I "." -DMODEL=constraints -DHAVESTDIO -DUSE_RTMODEL -DUNIX -c 
+
+ldflags =  -Wl,-twolevel_namespace -undefined error -arch x86_64 -mmacosx-version-min=10.9 -Wl,-syslibroot,/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX10.15.sdk -bundle   -L"$matlabdir/bin/maci64" -lmx -lmex -lmat -lc++  -Wl,-rpath,@loader_path -o constraints.mexmaci64 -lemlrt -lcovrt -lut -lmwmathutil  -Wl,-exported_symbols_list,constraints.map
+
+# Build Rules
+rule cc
+    command = $cc $cflags $in -o $out
+
+rule cxx
+    command = $cxx $cxxflags $in -o $out
+
+rule link
+    command = $linker $in $ldflags
+
+rule linkxx
+    command = $linkerxx $in $ldflags
+
+# Build
+build $builddir/rt_nonfinite.o : cc $root/rt_nonfinite.c
+build $builddir/constraints_data.o : cc $root/constraints_data.c
+build $builddir/constraints_initialize.o : cc $root/constraints_initialize.c
+build $builddir/constraints_terminate.o : cc $root/constraints_terminate.c
+build $builddir/constraints.o : cc $root/constraints.c
+build $builddir/u2acc.o : cc $root/u2acc.c
+build $builddir/eml_int_forloop_overflow_check.o : cc $root/eml_int_forloop_overflow_check.c
+build $builddir/power.o : cc $root/power.c
+build $builddir/sum.o : cc $root/sum.c
+build $builddir/_coder_constraints_api.o : cc $root/interface/_coder_constraints_api.c
+build $builddir/_coder_constraints_mex.o : cc $root/interface/_coder_constraints_mex.c
+build $builddir/constraints_emxutil.o : cc $root/constraints_emxutil.c
+build $builddir/_coder_constraints_info.o : cc $root/interface/_coder_constraints_info.c
+build $builddir/c_mexapi_version.o : cc $matlabdir/extern/version/c_mexapi_version.c
+
+# Link
+build $root/constraints.mexmaci64 : link $builddir/rt_nonfinite.o $builddir/constraints_data.o $builddir/constraints_initialize.o $builddir/constraints_terminate.o $builddir/constraints.o $builddir/u2acc.o $builddir/eml_int_forloop_overflow_check.o $builddir/power.o $builddir/sum.o $builddir/_coder_constraints_api.o $builddir/_coder_constraints_mex.o $builddir/constraints_emxutil.o $builddir/_coder_constraints_info.o $builddir/c_mexapi_version.o 
