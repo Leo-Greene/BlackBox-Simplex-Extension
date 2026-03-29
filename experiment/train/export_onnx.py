@@ -3,6 +3,7 @@ import torch.nn as nn
 import os
 import glob
 import shutil
+import json
 
 # 复用升级后的模型定义 (与 train3_robust.py 一致)
 class ResidualBlock(nn.Module):
@@ -55,10 +56,17 @@ def export_onnx():
     onnx_path_local = os.path.join(latest_dir, onnx_filename)
     onnx_path_root = os.path.join(OUT_DIR, onnx_filename)
 
+    # 从物理参数文件中读取 n 以确定维度
+    physical_params_path = os.path.join(latest_dir, 'physical_params.json')
+    n = 15 # 默认后备值
+    if os.path.exists(physical_params_path):
+        with open(physical_params_path, 'r') as f:
+            pp = json.load(f)
+            n = int(pp.get('n', 15))
+
     # 2. 配置并加载模型
-    # 根据 train_residual2.py 的默认参数
-    input_dim = 90  # 60 (X) + 30 (U) -> 之前 export_onnx.py 的注释写反了，这里修正
-    output_dim = 60 
+    input_dim = 6 * n  # 4*n (X) + 2*n (U)
+    output_dim = 4 * n 
     model = ResidualMLP(input_dim=input_dim, output_dim=output_dim, hidden_dim=256, depth=3)
     
     # 加载权重
@@ -68,9 +76,8 @@ def export_onnx():
     model.eval()
 
     # 3. 准备虚拟输入以便导出
-    # 根据用户要求：input_state (x) 维度 60, input_action (u) 维度 30
-    dummy_x = torch.randn(1, 60)
-    dummy_u = torch.randn(1, 30)
+    dummy_x = torch.randn(1, 4 * n)
+    dummy_u = torch.randn(1, 2 * n)
 
     # 4. 导出 ONNX
     print(f"Exporting to ONNX...")

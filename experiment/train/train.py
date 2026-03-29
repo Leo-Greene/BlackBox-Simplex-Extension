@@ -20,6 +20,11 @@ import torch.optim as optim
 from torch.utils.data import Dataset, DataLoader
 
 # ============================================================
+# Global Configuration
+# ============================================================
+GLOBAL_HORIZON = 10
+
+# ============================================================
 # Dataset (轨迹感知 + 预归一化优化)
 # ============================================================
 
@@ -27,7 +32,7 @@ class TrajectoryDataset(Dataset):
     """
     按轨迹加载数据，并在初始化时完成所有数据的预归一化，显著提升训练速度。
     """
-    def __init__(self, mat_file, horizon=5, stats=None):
+    def __init__(self, mat_file, horizon=GLOBAL_HORIZON, stats=None):
         self.mat_file = mat_file
         self.horizon = horizon
         self.physical_params = None
@@ -54,10 +59,15 @@ class TrajectoryDataset(Dataset):
             U_all = np.array(root['U']).T.astype(np.float32)
             R_all = np.array(root['R_label']).T.astype(np.float32)
             
-            # 通过位置跳变识别轨迹边界
-            pos = X_all[:, :30]
-            dist_sq = np.sum((pos[1:] - pos[:-1])**2, axis=1)
-            boundaries = np.where(dist_sq > 25.0)[0] + 1
+            # 使用 case_id 识别轨迹边界 (更健壮)
+            if 'case_id' in root:
+                case_id = np.array(root['case_id']).flatten()
+                boundaries = np.where(case_id[1:] != case_id[:-1])[0] + 1
+            else:
+                # 备选方案：通过位置跳变识别轨迹边界
+                pos = X_all[:, :30]
+                dist_sq = np.sum((pos[1:] - pos[:-1])**2, axis=1)
+                boundaries = np.where(dist_sq > 25.0)[0] + 1
             
             # 计算或接收统计量
             if stats is None:
@@ -84,6 +94,7 @@ class TrajectoryDataset(Dataset):
             if T > self.horizon:
                 for s in range(T - self.horizon):
                     self.valid_indices.append((t_idx, s))
+        print(f"--> Loaded {len(self.valid_indices)} valid training samples from {mat_file}")
 
     def __len__(self): return len(self.valid_indices)
 
@@ -135,13 +146,28 @@ def denormalize(val, m_t, s_t):
 def normalize(val, m_t, s_t):
     return (val - m_t) / s_t
 
-def nominal_dynamics_torch(x, u, dt=0.3):
-    p, v, a = x[:, :30], x[:, 30:], u
-    new_p = p + v * dt + 0.5 * a * (dt**2)
+def nominal_dynamics_torch(x, u, dt, vmax, pFactor, predator, n):
+    p, v, a = x[:, :2*n], x[:, 2*n:], u
     new_v = v + a * dt
-    return torch.cat([new_p, new_v], dim=-1)
+    
+    # 物理限速 (vmax 截断)
+    vx = new_v[:, :n]
+    vy = new_v[:, n:]
+    v_mag = torch.sqrt(vx**2 + vy**2 + 1e-8)
+    
+    # 计算每个 agent 的最大速度限制
+    vmax_tensor = torch.full_like(v_mag, vmax)
+    if predator > 0:
+        # 假设最后一个 agent (index n-1) 是 predator
+        vmax_tensor[:, -1] = vmax * pFactor
+        
+    scale = torch.clamp(vmax_tensor / v_mag, max=1.0)
+    new_v_clipped = torch.cat([vx * scale, vy * scale], dim=-1)
+    
+    new_p = p + new_v_clipped * dt # Semi-implicit Euler: 使用更新后的速度计算位移
+    return torch.cat([new_p, new_v_clipped], dim=-1)
 
-def compute_mixed_loss(model, x_seq, u_seq, r_lbl_seq, stats_t, horizon, alpha=1.0, beta=0.5, x0_override=None):
+def compute_mixed_loss(model, x_seq, u_seq, r_lbl_seq, stats_t, horizon, alpha, beta, x0_override, vmax, pFactor, predator, dt, n):
     """
     stats_t: 必须是已经 .to(device) 的张量字典。
     x0_override: 提供用于加噪训练的初始状态，避免 clone 整个 x_seq。
@@ -167,7 +193,7 @@ def compute_mixed_loss(model, x_seq, u_seq, r_lbl_seq, stats_t, horizon, alpha=1
         u_c = denormalize(u_t_norm, stats_t['U_mean'], stats_t['U_std'])
         r_p = denormalize(r_p_norm, rm, rs)
         
-        x_next_pred = nominal_dynamics_torch(x_c, u_c) + r_p
+        x_next_pred = nominal_dynamics_torch(x_c, u_c, dt=dt, vmax=vmax, pFactor=pFactor, predator=predator, n=n) + r_p
         
         # 对比物理空间真值 (真值在 Dataset 预归一化时已就绪)
         x_true_next = denormalize(x_seq[:, t+1, :], xm, xs)
@@ -186,7 +212,7 @@ def compute_mixed_loss(model, x_seq, u_seq, r_lbl_seq, stats_t, horizon, alpha=1
 def train():
     import argparse
     parser = argparse.ArgumentParser()
-    parser.add_argument('--epochs', type=int, default=240)
+    parser.add_argument('--epochs', type=int, default=120)
     parser.add_argument('--batch_size', type=int, default=256)
     parser.add_argument('--lr', type=float, default=3e-4)
     args = parser.parse_args()
@@ -208,7 +234,7 @@ def train():
     os.makedirs(BACKUP_DIR, exist_ok=True)
 
     DEVICE = 'cuda' if torch.cuda.is_available() else 'cpu'
-    HORIZON, BATCH_SIZE, EPOCHS, LR = 5, args.batch_size, args.epochs, args.lr # 使用解析后的参数
+    HORIZON, BATCH_SIZE, EPOCHS, LR = GLOBAL_HORIZON, args.batch_size, args.epochs, args.lr # 使用全局定义的 HORIZON
 
     # 加载数据集
     train_ds = TrajectoryDataset(os.path.join(DATA_DIR, 'dataset_train.mat'), horizon=HORIZON)
@@ -219,15 +245,27 @@ def train():
     train_loader = DataLoader(train_ds, batch_size=BATCH_SIZE, shuffle=True, pin_memory=True, num_workers=num_workers)
     val_loader = DataLoader(val_ds, batch_size=BATCH_SIZE, shuffle=False, pin_memory=True, num_workers=num_workers)
 
+    print(f"--> Starting Optimized Robust Training on {DEVICE}")
+    vmax_val = 2.0
+    pFactor_val = 1.40
+    predator_val = 0
+    dt_val = 0.3
+    n_val = 15
+    if hasattr(train_ds, 'physical_params') and train_ds.physical_params:
+        vmax_val = float(train_ds.physical_params.get('vmax', 2.0))
+        pFactor_val = float(train_ds.physical_params.get('pFactor', 1.40))
+        predator_val = int(train_ds.physical_params.get('predator', 0))
+        dt_val = float(train_ds.physical_params.get('dt', 0.3))
+        n_val = int(train_ds.physical_params.get('n', 15))
+
     # 准备统计量 Tensor (核心改进：只创建一次，并传给 loss 函数)
     stats_t = {k: torch.tensor(v, device=DEVICE) for k, v in train_ds.stats.items()}
 
-    model = ResidualMLP().to(DEVICE)
+    model = ResidualMLP(input_dim=6*n_val, output_dim=4*n_val).to(DEVICE)
     optimizer = optim.AdamW(model.parameters(), lr=LR, weight_decay=2e-3)
     scaler = torch.cuda.amp.GradScaler(enabled=(DEVICE == 'cuda')) # 开启混合精度
     scheduler = optim.lr_scheduler.CosineAnnealingWarmRestarts(optimizer, T_0=20)
 
-    print(f"--> Starting Optimized Robust Training on {DEVICE}")
     best_val = float('inf')
     PATIENCE_LIMIT = 25
     patience_counter = 0
@@ -246,7 +284,11 @@ def train():
 
             optimizer.zero_grad()
             with torch.cuda.amp.autocast(enabled=(DEVICE == 'cuda')):
-                loss = compute_mixed_loss(model, x_seq, u_seq, r_lbl, stats_t, HORIZON, alpha=1.0, beta=beta_curr, x0_override=x0_aug)
+                loss = compute_mixed_loss(
+                    model, x_seq, u_seq, r_lbl, stats_t, HORIZON, 
+                    alpha=1.0, beta=beta_curr, x0_override=x0_aug, 
+                    vmax=vmax_val, pFactor=pFactor_val, predator=predator_val, dt=dt_val, n=n_val
+                )
             
             scaler.scale(loss).backward()
             scaler.unscale_(optimizer)
@@ -260,7 +302,11 @@ def train():
         with torch.no_grad():
             for x_seq, u_seq, r_lbl in val_loader:
                 x_seq, u_seq, r_lbl = x_seq.to(DEVICE), u_seq.to(DEVICE), r_lbl.to(DEVICE)
-                v_loss = compute_mixed_loss(model, x_seq, u_seq, r_lbl, stats_t, HORIZON, alpha=1.0, beta=0.5)
+                v_loss = compute_mixed_loss(
+                    model, x_seq, u_seq, r_lbl, stats_t, HORIZON, 
+                    alpha=1.0, beta=0.5, x0_override=None,
+                    vmax=vmax_val, pFactor=pFactor_val, predator=predator_val, dt=dt_val, n=n_val
+                )
                 val_l += v_loss.item()
         
         avg_train = train_l / len(train_loader); avg_val = val_l / len(val_loader)

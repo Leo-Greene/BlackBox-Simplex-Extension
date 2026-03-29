@@ -29,6 +29,10 @@ experiment/train/out/*.pt
 experiment/train/out/*.onnx
 experiment/train/out/*.json
 
+# 忽略验证输出的结果和日志
+experiment/validation/out/20*
+experiment/test/out/20*
+
 # OS
 .DS_Store
 Thumbs.db
