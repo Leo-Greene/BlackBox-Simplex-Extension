@@ -256,6 +256,9 @@ if exist(VAL_MAT, 'file')
     [max_err, max_idx] = max([results_table.error_norm]);
     worst_sample = results_table(max_idx);
     
+    [~, min_idx] = min([results_table.error_norm]);
+    best_sample = results_table(min_idx);
+    
     report_file = fullfile(TEST_OUT, 'error_analysis_report.txt');
     fid = fopen(report_file, 'w');
     fprintf(fid, '====================================================\n');
@@ -269,7 +272,8 @@ if exist(VAL_MAT, 'file')
     fprintf(fid, '   - Total Samples Test:      %d\n', length(results_table));
     fprintf(fid, '   - Mean L2 Norm Error:      %.6f\n', mean([results_table.error_norm]));
     fprintf(fid, '   - Median L2 Norm Error:    %.6f\n', median([results_table.error_norm]));
-    fprintf(fid, '   - Max L2 Norm Error:       %.6f (Worst Case)\n\n', max_err);
+    fprintf(fid, '   - Max L2 Norm Error:       %.6f (Worst Case)\n', max_err);
+    fprintf(fid, '   - Mean Avg Dist Error:     %.6f m\n\n', mean([results_table.avg_dist_err]));
     
     fprintf(fid, '2. WORST CASE DETAIL:\n');
     fprintf(fid, '   - Sample Index in Test Set: %d\n', worst_sample.index);
@@ -389,7 +393,7 @@ if exist(VAL_MAT, 'file')
     fprintf('--> CAUSALITY ANALYSIS PLOT SAVED: %s\n', plot_file);
     close(gcf);
 
-    %% 10. 绘图：误差随预测步数 (1-10步) 的演化图 (Error Propagation)
+    %% 6.2 绘图：误差随预测步数 (1-10步) 的演化图 (Error Propagation)
     figure('Name', 'Multi-step Error Propagation', 'Visible', 'off');
     set(gcf, 'Position', [100, 100, 1000, 600]);
     
@@ -425,6 +429,122 @@ if exist(VAL_MAT, 'file')
     prop_plot_file = fullfile(TEST_OUT, 'error_propagation_plot.png');
     saveas(gcf, prop_plot_file);
     fprintf('--> ERROR PROPAGATION PLOT SAVED: %s\n', prop_plot_file);
+    close(gcf);
+
+    %% 6.3 绘图：最差情况 (Worst Case) 真实轨迹 vs 预测轨迹对比
+    % 重新模拟最差情况，便于获取完整轨迹
+    idx_worst = worst_sample.index;
+    x_start_worst = X_val(:, idx_worst);
+    if size(U_val, 1) == action_dim
+        u_seq_worst = double(U_val(:, idx_worst:idx_worst+horizon-1))'; 
+    else
+        u_seq_worst = double(U_val(idx_worst:idx_worst+horizon-1, :));
+    end
+
+    x_curr = reshape(x_start_worst, 1, state_dim);
+    pred_traj = zeros(horizon + 1, state_dim);
+    pred_traj(1, :) = x_curr;
+
+    for t = 1:horizon
+        [x_next_raw, ~] = dynamics_learned(x_curr, u_seq_worst(t, :), @residual_net, params_onnx, stats, eval_params);
+        x_curr = x_next_raw(1, :);
+        pred_traj(t+1, :) = x_curr;
+    end
+
+    true_traj = double(X_val(:, idx_worst:idx_worst+horizon))'; % [horizon+1 x state_dim]
+
+    figure('Name', 'Worst Case Trajectory Comparison', 'Visible', 'off');
+    set(gcf, 'Position', [100, 100, 800, 800]);
+    hold on;
+
+    h_true = []; h_pred = []; h_start = []; h_end_t = []; h_end_p = [];
+
+    % 遍历绘制每一个 Agent 的位移轨迹
+    for j = 1:n_agents
+        p1 = plot(true_traj(:, j), true_traj(:, n_agents+j), '-b', 'LineWidth', 1.5, 'Marker', '.');
+        p2 = plot(pred_traj(:, j), pred_traj(:, n_agents+j), '--r', 'LineWidth', 1.5, 'Marker', 'x');
+        
+        % 标记起点、终点位置
+        p3 = plot(true_traj(1, j), true_traj(1, n_agents+j), 'og', 'MarkerFaceColor', 'g', 'MarkerSize', 6);
+        p4 = plot(true_traj(end, j), true_traj(end, n_agents+j), 'sb', 'MarkerFaceColor', 'b', 'MarkerSize', 6);
+        p5 = plot(pred_traj(end, j), pred_traj(end, n_agents+j), '^r', 'MarkerFaceColor', 'r', 'MarkerSize', 6);
+        
+        % 收集供图例使用的线把柄
+        if j == 1
+            h_true = p1; h_pred = p2; h_start = p3; h_end_t = p4; h_end_p = p5;
+        end
+    end
+
+    grid on; axis equal;
+    title(sprintf('Worst Case Trajectory Comparison (Index: %d, Max L2 Error: %.2f)', idx_worst, worst_sample.error_norm));
+    xlabel('X Position (m)'); ylabel('Y Position (m)');
+    
+    % 添加图例说明
+    legend([h_true, h_pred, h_start, h_end_t, h_end_p], ...
+           {'True Trajectory', 'Predicted Trajectory', 'Start Position', 'True End Position', 'Predicted End Position'}, ...
+           'Location', 'best');
+
+    plot_file = fullfile(TEST_OUT, 'worst_case_comparison_plot.png');
+    saveas(gcf, plot_file);
+    fprintf('--> WORST CASE COMPARISON PLOT SAVED: %s\n', plot_file);
+    close(gcf);
+
+    %% 6.4 绘图：最好情况 (Best Case) 真实轨迹 vs 预测轨迹对比
+    % 重新模拟最好情况 (误差最小的样本)
+    idx_best = best_sample.index;
+    x_start_best = X_val(:, idx_best);
+    if size(U_val, 1) == action_dim
+        u_seq_best = double(U_val(:, idx_best:idx_best+horizon-1))'; 
+    else
+        u_seq_best = double(U_val(idx_best:idx_best+horizon-1, :));
+    end
+
+    x_curr = reshape(x_start_best, 1, state_dim);
+    pred_traj_best = zeros(horizon + 1, state_dim);
+    pred_traj_best(1, :) = x_curr;
+
+    for t = 1:horizon
+        [x_next_raw, ~] = dynamics_learned(x_curr, u_seq_best(t, :), @residual_net, params_onnx, stats, eval_params);
+        x_curr = x_next_raw(1, :);
+        pred_traj_best(t+1, :) = x_curr;
+    end
+
+    true_traj_best = double(X_val(:, idx_best:idx_best+horizon))'; % [horizon+1 x state_dim]
+
+    figure('Name', 'Best Case Trajectory Comparison', 'Visible', 'off');
+    set(gcf, 'Position', [200, 200, 800, 800]);
+    hold on;
+
+    h_true = []; h_pred = []; h_start = []; h_end_t = []; h_end_p = [];
+
+    % 遍历绘制每一个 Agent 的位移轨迹
+    for j = 1:n_agents
+        p1 = plot(true_traj_best(:, j), true_traj_best(:, n_agents+j), '-b', 'LineWidth', 1.5, 'Marker', '.');
+        p2 = plot(pred_traj_best(:, j), pred_traj_best(:, n_agents+j), '--r', 'LineWidth', 1.5, 'Marker', 'x');
+        
+        % 标记起点、终点位置
+        p3 = plot(true_traj_best(1, j), true_traj_best(1, n_agents+j), 'og', 'MarkerFaceColor', 'g', 'MarkerSize', 6);
+        p4 = plot(true_traj_best(end, j), true_traj_best(end, n_agents+j), 'sb', 'MarkerFaceColor', 'b', 'MarkerSize', 6);
+        p5 = plot(pred_traj_best(end, j), pred_traj_best(end, n_agents+j), '^r', 'MarkerFaceColor', 'r', 'MarkerSize', 6);
+        
+        % 收集供图例使用的线把柄
+        if j == 1
+            h_true = p1; h_pred = p2; h_start = p3; h_end_t = p4; h_end_p = p5;
+        end
+    end
+
+    grid on; axis equal;
+    title(sprintf('Best Case Trajectory Comparison (Index: %d, Min L2 Error: %.2f)', idx_best, best_sample.error_norm));
+    xlabel('X Position (m)'); ylabel('Y Position (m)');
+    
+    % 添加图例说明
+    legend([h_true, h_pred, h_start, h_end_t, h_end_p], ...
+           {'True Trajectory', 'Predicted Trajectory', 'Start Position', 'True End Position', 'Predicted End Position'}, ...
+           'Location', 'best');
+
+    plot_file_best = fullfile(TEST_OUT, 'best_case_comparison_plot.png');
+    saveas(gcf, plot_file_best);
+    fprintf('--> BEST CASE COMPARISON PLOT SAVED: %s\n', plot_file_best);
     close(gcf);
 
 else

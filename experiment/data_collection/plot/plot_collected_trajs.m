@@ -14,7 +14,7 @@ addpath(genpath('common/display'));
 addpath('extended_BBS'); % 包含 display_reverse_switch.m
 addpath('decision_module');
 
-output_root = fullfile('traj', 'step3_collect');
+output_root = fullfile('traj', 'step4_integrate');
 manifest_mat = '';
 
 % 自动寻找最新的 manifest.mat

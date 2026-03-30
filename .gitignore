@@ -21,6 +21,7 @@ ENV/
 # Data and Artifacts
 # 忽略采集的轨迹数据，只保留结构 (如果需要)
 traj/step3_collect/20*
+traj/step4_integrate/20*
 !traj/step3_collect/.gitkeep
 
 # 忽略训练输出的模型和日志
