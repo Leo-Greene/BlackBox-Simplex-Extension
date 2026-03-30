@@ -315,34 +315,45 @@ if exist(VAL_MAT, 'file')
     
     % --- 6.1: 轨迹全时段误差分布 ---
     subplot(4, 1, 1);
-    plot([results_table.index], [results_table.error_norm], '-o', 'LineWidth', 1.5, 'Color', [0.85, 0.33, 0.1]);
-    title('10-Step Rollout Cumulative Error (Full Dataset Scan)');
-    xlabel('Sample Start Index'); ylabel('L2 Norm Error');
+    plot([results_table.index], [results_table.avg_dist_err], '-o', 'LineWidth', 1.5, 'Color', [0.85, 0.33, 0.1]);
+    title(['10-Step Rollout Accuracy Analysis (Avg Distance Error) - ', report_timestamp], 'Interpreter', 'none');
+    xlabel('Sample Start Index'); ylabel('Avg Agent Dist Error (m)');
     grid on;
-    title(['10-Step Rollout Accuracy Analysis - ', report_timestamp], 'Interpreter', 'none');
-    ylabel('L2 Norm Error');
+    xticks(0:60:num_samples);
+    xlim([0, num_samples]);
+    % Add case boundary lines
+    hold on;
+    xline(0:60:num_samples, '--', 'Color', [0.5 0.5 0.5], 'Alpha', 0.3, 'HandleVisibility', 'off');
 
-    % --- 子图 2: 当前时刻的平均速度 (Correlation) ---
-    avg_vel_mag = zeros(num_samples, 1);
-    for k = 1:num_samples
+    % --- 子图 2: 预测时段内的平均速度 (Velocity vs. Error) ---
+    avg_vel_horizon = NaN(num_samples, 1);
+    for i = 1:num_samples - horizon
+        % 计算该时段内所有 agent 的平均速度
         if size(X_val, 2) == state_dim
-            vx_row = double(X_val(k, 2*n_agents+1:3*n_agents));
-            vy_row = double(X_val(k, 3*n_agents+1:4*n_agents));
+            vx_horizon = double(X_val(i:i+horizon-1, 2*n_agents+1:3*n_agents));
+            vy_horizon = double(X_val(i:i+horizon-1, 3*n_agents+1:4*n_agents));
         else
-            vx_row = double(X_val(2*n_agents+1:3*n_agents, k));
-            vy_row = double(X_val(3*n_agents+1:4*n_agents, k));
+            vx_horizon = double(X_val(2*n_agents+1:3*n_agents, i:i+horizon-1))';
+            vy_horizon = double(X_val(3*n_agents+1:4*n_agents, i:i+horizon-1))';
         end
-        avg_vel_mag(k) = mean(sqrt(vx_row.^2 + vy_row.^2));
+        % vx_horizon is [horizon x n_agents]
+        vel_mags = sqrt(vx_horizon.^2 + vy_horizon.^2);
+        avg_vel_horizon(i) = mean(vel_mags(:)); 
     end
+    
     subplot(4, 1, 2);
-    plot(1:num_samples, avg_vel_mag, '-k', 'LineWidth', 1.2);
+    plot(1:num_samples, avg_vel_horizon, '-k', 'LineWidth', 1.2);
+    ylabel('Avg Velocity (m/s)');
     hold on;
     yyaxis right
-    plot([results_table.index], [results_table.error_norm], '--r', 'LineWidth', 0.8);
-    ylabel('Rollout Error');
+    plot([results_table.index], [results_table.avg_dist_err], '--r', 'LineWidth', 0.8);
+    ylabel('Rollout Error (m)');
     grid on;
-    title('Current Velocity vs. Error Trend');
-    legend('Avg Speed (m/s)', 'Rollout Error', 'Location', 'northwest');
+    xticks(0:60:num_samples);
+    xlim([0, num_samples]);
+    xline(0:60:num_samples, '--', 'Color', [0.5 0.5 0.5], 'Alpha', 0.3, 'HandleVisibility', 'off');
+    title('Mean Velocity (10-step Horizon) vs. Error Trend');
+    legend('Avg Speed (m/s)', 'Rollout Dist Error', 'Location', 'northwest');
 
     % --- 子图 3: 未来10步的累计加速度强度 (Future Intensity) ---
     % 这个指标反映了预测任务的“剧烈程度”
@@ -360,13 +371,17 @@ if exist(VAL_MAT, 'file')
 
     subplot(4, 1, 3);
     plot(1:num_samples, avg_acc_future, '-m', 'LineWidth', 1.2);
+    ylabel('Avg Acceleration (m/s^2)');
     hold on;
     yyaxis right
-    plot([results_table.index], [results_table.error_norm], '--r', 'LineWidth', 0.8);
-    ylabel('Rollout Error');
+    plot([results_table.index], [results_table.avg_dist_err], '--r', 'LineWidth', 0.8);
+    ylabel('Rollout Error (m)');
     grid on;
+    xticks(0:60:num_samples);
+    xlim([0, num_samples]);
+    xline(0:60:num_samples, '--', 'Color', [0.5 0.5 0.5], 'Alpha', 0.3, 'HandleVisibility', 'off');
     title('Future Action Intensity (Mean Acc over 10 steps) vs. Error');
-    legend('Avg Future Acc', 'Rollout Error', 'Location', 'northwest');
+    legend('Avg Future Acc', 'Rollout Dist Error', 'Location', 'northwest');
 
     % --- 子图 4: 位置特征 (离中心的距离) ---
     dist_to_center = zeros(num_samples, 1);
@@ -383,6 +398,10 @@ if exist(VAL_MAT, 'file')
     subplot(4, 1, 4);
     plot(1:num_samples, dist_to_center, '-b', 'LineWidth', 1.2);
     grid on;
+    xticks(0:60:num_samples);
+    xlim([0, num_samples]);
+    hold on;
+    xline(0:60:num_samples, '--', 'Color', [0.5 0.5 0.5], 'Alpha', 0.3, 'HandleVisibility', 'off');
     title('Scenario Progress (Avg Dist to Origin)');
     xlabel('Sample Index (Time Step)');
     ylabel('Mean Distance (m)');

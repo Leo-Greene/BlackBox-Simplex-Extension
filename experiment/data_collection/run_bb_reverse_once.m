@@ -71,12 +71,12 @@ params.ws_bb = 3000;
 params.w_orient = 20;
 
 % Unmodeled params in true_dynamics (defaults, can be overridden by cfg.params_overrides)
-params.acc_scale = 0.95;
-params.acc_bias = 0;
-params.damping = 0.03;
-params.nonlinear_drift = false;
-params.noise_std = 0;
-params.control_noise_std = 0; % Optional small action perturbation for exploration cases.
+% params.acc_scale = 0.95;
+% params.acc_bias = 0;
+% params.damping = 0.03;
+% params.nonlinear_drift = false;
+% params.noise_std = 0;
+% params.control_noise_std = 0; % Optional small action perturbation for exploration cases.
 
 % params.acc_scale = 0.85;
 % params.acc_bias = 0;
@@ -85,12 +85,12 @@ params.control_noise_std = 0; % Optional small action perturbation for explorati
 % params.noise_std = 0.005;
 % params.control_noise_std = 0; % Optional small action perturbation for exploration cases.
 
-% params.acc_scale = 0.7;
-% params.acc_bias = 0.1;
-% params.damping = 0.15;
-% params.nonlinear_drift = true;
-% params.noise_std = 0.05;
-% params.control_noise_std = 0; % Optional small action perturbation for exploration cases.
+params.acc_scale = 0.7;
+params.acc_bias = 0.1;
+params.damping = 0.15;
+params.nonlinear_drift = true;
+params.noise_std = 0.05;
+params.control_noise_std = 0; % Optional small action perturbation for exploration cases.
 
 params.predator = 0;
 params.pFactor = 1.40;
