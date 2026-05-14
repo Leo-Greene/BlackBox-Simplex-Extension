@@ -1,4 +1,4 @@
-function [a, fit_val, exit_flag, prev_sol, history] = controller_cmpc_2d_quadprog(pos, vel, params, opt)
+function [a, fit_val, exit_flag, prev_sol, history] = controller_cmpc_2d_quadprog_soft(pos, vel, params, opt)
 %% controller_cmpc_2d - Run MPC controller using quadprog
 %
 % Input:
@@ -43,14 +43,38 @@ function [a, fit_val, exit_flag, prev_sol, history] = controller_cmpc_2d_quadpro
     % 限速约束
     [A_vel, b_vel] = compute_velocity_constraints(V_base, Bv, params);
 
-    % PrSBC 安全约束
-    % [A_sbc, b_sbc] = compute_PrSBC_constraints(pos, vel, params);
+    % 防碰撞约束
+    % [A_col, b_col] = compute_collision_constraints_linear(P_base, Bp, params);
+    [A_col, b_col] = compute_collision_constraints_cbf(P_base, Bp, pos, params);
 
-    [A_col, b_col] = compute_collision_constraints_linear(P_base, Bp, params);
+    % =========================================================================
+    % --- 3.5 引入松弛变量 (Soft Constraints) ---
+    % =========================================================================
+    [n_col_constraints, ~] = size(A_col); % 获取防碰撞约束的数量
+    
+    % 软约束惩罚权重 (可适当调小一点，让 AC 在关键时刻更容易放弃硬抗)
+    rho_ac = 1e6; 
+    
+    % 扩展 H 和 f 矩阵
+    H_new = blkdiag(H, 2 * rho_ac * eye(n_col_constraints)); 
+    f_new = [f; zeros(n_col_constraints, 1)];
 
-    % 组合约束
-    A_ineq = [A_col; A_vel];
-    b_ineq = [b_col; b_vel];
+    
+    % 扩展不等式矩阵: 碰撞约束引入 -epsilon，限速约束不引入(补零)
+    A_col_soft = [A_col, -eye(n_col_constraints)];
+    A_vel_pad  = [A_vel, zeros(size(A_vel, 1), n_col_constraints)];
+    
+    A_ineq_new = [A_col_soft; A_vel_pad];
+    b_ineq_new = [b_col; b_vel];
+    
+    % 扩展边界条件 (epsilon >= 0)
+    lb_new = [lb; zeros(n_col_constraints, 1)];
+    ub_new = [ub; inf * ones(n_col_constraints, 1)];
+    
+
+
+    % 扩展初值
+    u_init_new = [u_init; zeros(n_col_constraints, 1)];
 
     % --- 4. 调用 QP 求解器 ---
     if ~isempty(opt)
@@ -58,22 +82,27 @@ function [a, fit_val, exit_flag, prev_sol, history] = controller_cmpc_2d_quadpro
     else
         qp_opt = optimoptions('quadprog', 'Display', 'off', 'MaxIterations', 8000);
     end
-    [U_opt, fit_val, exit_flag] = quadprog(H, f, A_ineq, b_ineq, [], [], lb, ub, u_init, qp_opt);
+        
+    % 注意：传入的是扩展后的 _new 矩阵
+    [X_opt, fit_val, exit_flag] = quadprog(H_new, f_new, A_ineq_new, b_ineq_new, [], [], lb_new, ub_new, u_init_new, qp_opt);
 
     % --- 5. 处理结果与提取指令 ---
     if exit_flag < 0
         % 求解失败时的安全容错处理（Fallback）
         warning('[AC] QP Solver failed with exit_flag = %d. Using safe fallback.', exit_flag);
         a = zeros(2, n); % 紧急刹车或保持上次指令
-        fit_val = 1e6;  % 赋予一个惩罚值，避免空数组导致的崩溃
+        fit_val = 1e6;   % 赋予一个惩罚值，避免空数组导致的崩溃
         prev_sol = u_init; 
     else
-        % 正常求解，提取第一步的控制指令
+        % 正常求解，提取出属于控制指令 U 的部分 (丢弃 epsilon)
+        U_opt = X_opt(1:N_vars); 
+        
+        % 提取第一步的控制指令
         u_step_1_vec = U_opt(1 : 2*n);
         a = reshape(u_step_1_vec, 2, n); % 完美还原成 2 x n
         prev_sol = U_opt; % 保存当前解供下一步 warm start 使用
     end
     
-    % 返回空的 history（如果不需要记录迭代历史的话）
+    % 返回空的 history
     history = [];
 end

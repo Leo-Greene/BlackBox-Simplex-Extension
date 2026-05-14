@@ -22,7 +22,7 @@ addpath(genpath(fullfile(project_root, 'experiment', 'utilities')));
 
 %% params
 
-params.n = 6;
+params.n = 15;
 params.dt = 0.3;
 params.ct = 0.3;
 params.h_ac = 10;
@@ -89,12 +89,19 @@ result.is_switch = false;
 
 %% quadprog Optimizer Settings
 opt = optimoptions('quadprog');
-opt.Display = 'off';
-%opt.MaxIterations = 8000;
-% opt.OptimalityTolerance = 1e-7;
-% opt.ConstraintTolerance = 1e-7;
-% opt.StepTolerance = 1e-12;
-%opt.FunValCheck = 'on'; % 检查目标函数值是否为 NaN 或 Inf，防止求解器崩溃
+opt.Algorithm = 'interior-point-convex'; % 显式指定内点法，适合大规模约束
+opt.Display = 'off';                     % 关闭输出，加快仿真速度
+
+% 容差设置：
+% 适当放宽容差可以显著提升在软约束环境下的求解速度，避免数值抖动
+opt.OptimalityTolerance = 1e-6; 
+opt.ConstraintTolerance = 1e-6; % 关键：配合 1e6 的 rho 惩罚项，防止因数值精度报错
+opt.StepTolerance = 1e-10;
+
+% 性能与稳定性：
+% opt.MaxIterations = 8000;       % 2000 次迭代足够内点法收敛
+opt.LinearSolver = 'sparse';    % 启用稀疏矩阵求解器，提升计算效率
+% opt.FunValCheck = 'on';       % 调试时可开启，正式运行建议关闭以提升性能
 
 
 
@@ -138,7 +145,10 @@ policy = ones(1, params.steps);
 mde = 1;
 
 exit_flag_optimizer = zeros(1, params.steps);
-a_sequence = zeros(params.steps, params.n, 2, params.h_bc+1);
+
+% 暂时不考虑让最后一步指令为零，检验决策模块和安全控制器的功能
+% a_sequence = zeros(params.steps, params.n, 2, params.h_bc+1);
+a_sequence = zeros(params.steps, params.n, 2, params.h_bc);
 
 a_ac_traj = zeros(2, params.n, params.steps);
 
@@ -163,33 +173,38 @@ for t = 1:params.steps  % 1) run optimizer 2) update instruction 3) run dynamics
     end
 
     % Sensor observation: controllers and decision module see noisy states.
-    for i = 1:params.n
-        % --- 生成 2D 高斯位置噪声 v_i ---
-        % randn(2,1) 会直接生成 2x1 的标准正态分布 [N(0,1); N(0,1)]
-        % 乘以 sigma_obs 后，就变成了协方差矩阵为 sigma_obs^2 * I 的 2D 高斯噪声！
-        v_i_pos = params.sigma_obs_pos * randn(2, 1); 
-        v_i_vel = params.sigma_obs_vel * randn(2, 1);
+    % for i = 1:params.n
+    %     % --- 生成 2D 高斯位置噪声 v_i ---
+    %     % randn(2,1) 会直接生成 2x1 的标准正态分布 [N(0,1); N(0,1)]
+    %     % 乘以 sigma_obs 后，就变成了协方差矩阵为 sigma_obs^2 * I 的 2D 高斯噪声！
+    %     v_i_pos = params.sigma_obs_pos * randn(2, 1); 
+    %     v_i_vel = params.sigma_obs_vel * randn(2, 1);
         
-        % 将观测噪声叠加到真实位置上，形成观测位置
-        hat_pos(:, i) = pos(:, i) + v_i_pos;
-        hat_vel(:, i) = vel(:, i) + v_i_vel;
-    end
+    %     % 将观测噪声叠加到真实位置上，形成观测位置
+    %     hat_pos(:, i) = pos(:, i) + v_i_pos;
+    %     hat_vel(:, i) = vel(:, i) + v_i_vel;
+    % end
+    % 暂时不考虑噪声，检验决策模块和安全控制器的功能
+    hat_pos = pos;
+    hat_vel = vel;
     
     if mod(t - 1, controller_run) == 0  % run optimizer every controller_run steps
         
         %[a_ac, fval, e_flag, prev_sol, history] = controller_cmpc_2d(hat_pos, hat_vel, params, opt);
-        [a_ac, fval, e_flag, prev_sol, history] = controller_cmpc_2d_quadprog(hat_pos, hat_vel, params, opt);
-        
+        % [a_ac, fval, e_flag, prev_sol, history] = controller_cmpc_2d_quadprog(hat_pos, hat_vel, params, opt);
+        [a_ac, fval, e_flag, prev_sol, history] = controller_cmpc_2d_quadprog_soft(hat_pos, hat_vel, params, opt);
+
         [next_pos, next_vel] = next_state(hat_pos, hat_vel, a_ac, params);
         % [~, ~, ~, ~, ~, a_h] = controller_safety_bb(next_pos, next_vel, params, opt);
-        [~, ~, ~, ~,~, a_h] = controller_safety_bb_quadprog(next_pos, next_vel, params, opt);
+        % [~, ~, ~, ~,~, a_h] = controller_safety_bb_quadprog(next_pos, next_vel, params, opt);
+        [~, ~, ~, ~, ~, a_h] = controller_safety_bb_quadprog_soft(next_pos, next_vel, params, opt);
         
         [decision, result] = decison_module(hat_pos, hat_vel, params, a_ac, a_h);
         if decision
             if isfield(result, 'cause') && isfield(result, 'pair')
-                disp(['Decision rejected at step ' num2str(t) ', cause=' num2str(result.cause) ', pair=' mat2str(result.pair)]);
+                disp(['[DM] Decision rejected at step ' num2str(t) ', cause=' num2str(result.cause) ', pair=' mat2str(result.pair)]);
             else
-                disp(['Decision rejected at step ' num2str(t) ', result is incomplete.']);
+                disp(['[DM] Decision rejected at step ' num2str(t) ', result is incomplete.']);
             end
         end
 %         display(result)
@@ -259,8 +274,8 @@ for t = 1:params.steps  % 1) run optimizer 2) update instruction 3) run dynamics
     
     %[pos, vel] = stochastic_dynamics(pos, vel, acc, params, 0.02, 0.05);
     %[pos, vel] = true_dynamics(pos, vel, acc, params);
-    % [pos, vel] = dynamics(pos, vel, acc, params);
-    [pos, vel] = plant_dynamics(pos, vel, acc, params);
+    [pos, vel] = dynamics(pos, vel, acc, params);
+    % [pos, vel] = plant_dynamics(pos, vel, acc, params);
     x(t+1,:) = pos(1,:);
     y(t+1,:) = pos(2,:);
     vx(t+1,:) = vel(1,:);

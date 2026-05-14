@@ -1,4 +1,4 @@
-function [a, fit_val, exit_flag, prev_sol, history, a_h] = controller_safety_bb_quadprog(pos, vel, params, opt)
+function [a, fit_val, exit_flag, prev_sol, history, a_h] = controller_safety_bb_quadprog_soft(pos, vel, params, opt)
 %% controller_safety_bb_quadprog - Run safety-critical MPC controller using quadprog
 %
 % Input:
@@ -33,7 +33,7 @@ function [a, fit_val, exit_flag, prev_sol, history, a_h] = controller_safety_bb_
     V_des_3d = zeros(2, n, h_bc);
 
     % 排斥力增益和作用范围（可调参数）
-    k_repulse = 3.0; % 排斥力强度，越大越想散开
+    k_repulse = 5.0; % 排斥力强度，越大越想散开
     dist_influence = 4.0; % 在多少距离内产生排斥力
 
     for k = 1:h_bc
@@ -108,20 +108,46 @@ function [a, fit_val, exit_flag, prev_sol, history, a_h] = controller_safety_bb_
     % PrSBC 安全约束
     % [A_sbc, b_sbc] = compute_PrSBC_constraints(pos, vel, params);
 
-    [A_col, b_col] = compute_collision_constraints_linear(P_base, Bp, params);
+    % [A_col, b_col] = compute_collision_constraints_linear(P_base, Bp, params);
+    [A_col, b_col] = compute_collision_constraints_cbf(P_base, Bp, pos, params);
 
-    % 组合约束
-    A_ineq = [A_col; A_vel];
-    b_ineq = [b_col; b_vel];
+    % --- 在构造 A_ineq 之前 ---
+    [n_constraints, ~] = size(A_col); % 获取防碰撞约束的数量
 
-    % --- 4. 调用 QP 求解器 ---
+    % 1. 扩展决策变量：X = [U; epsilon]
+    % epsilon 的维度等于 n_constraints
+    N_vars_total = N_vars + n_constraints;
+
+    % 2. 构造新的目标函数 H_new, f_new
+    rho = 1e6; % 惩罚系数，建议取 1e5 ~ 1e8 之间
+    H_new = blkdiag(H, 2 * rho * eye(n_constraints)); 
+    f_new = [f; zeros(n_constraints, 1)];
+
+    % 3. 构造新的不等式约束 [A_col, -I] * [U; eps] <= b_col
+    % 注意：限速约束 A_vel 通常保持为硬约束，不需要松弛
+    A_col_soft = [A_col, -eye(n_constraints)];
+    A_vel_pad  = [A_vel, zeros(size(A_vel, 1), n_constraints)];
+
+    A_ineq_new = [A_col_soft; A_vel_pad];
+    b_ineq_new = [b_col; b_vel];
+
+    % 4. 设置边界约束
+    % U 的边界保持不变，epsilon 必须 >= 0
+    lb_new = [lb; zeros(n_constraints, 1)];
+    ub_new = [ub; inf * ones(n_constraints, 1)];
+
+    % 5. 调用求解器
     if ~isempty(opt)
         qp_opt = opt;
     else
         qp_opt = optimoptions('quadprog', 'Display', 'off', 'MaxIterations', 8000);
     end
-    [U_opt, fit_val, exit_flag] = quadprog(H, f, A_ineq, b_ineq, [], [], lb, ub, u_init, qp_opt);
+    u_init_new = [u_init; zeros(n_constraints, 1)];
+    [X_opt, fit_val, exit_flag] = quadprog(H_new, f_new, A_ineq_new, b_ineq_new, [], [], lb_new, ub_new, u_init_new, qp_opt);
 
+    % 6. 提取 U
+    U_opt = X_opt(1:N_vars);
+    
     % --- 5. 处理结果与提取指令 ---
     if exit_flag < 0
         % 发生死锁/无解时，使用紧急分离策略
