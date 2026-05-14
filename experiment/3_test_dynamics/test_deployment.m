@@ -35,8 +35,8 @@ if nargin < 2 || isempty(custom_model_dir)
     if isempty(d)
         error('在 %s 目录下未找到任何模型文件夹。', TRAIN_OUT);
     end
-    [~, idx] = max([d.datenum]);
-    LATEST_MODEL_DIR = fullfile(TRAIN_OUT, d(idx).name);
+    [~, sorted_idx] = sort({d.name});
+    LATEST_MODEL_DIR = fullfile(TRAIN_OUT, d(sorted_idx(end)).name);
 else
     % 检查指定的路径是否为绝对路径或相对于 TRAIN_OUT 的路径
     if isfolder(custom_model_dir)

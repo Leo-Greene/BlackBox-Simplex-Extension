@@ -41,12 +41,14 @@ if ~isempty(cfg.seed)
 end
 
 %% Dependencies
-addpath(genpath('controllers/ac/controller_cmpc_2d'));
-addpath(genpath('controllers/bc/safety_controller'));
-addpath(genpath('decision_module'));
-addpath(genpath('extended_BBS'));
-addpath('common');
-addpath(fullfile(fileparts(mfilename('fullpath')), '..', 'dynamics'));
+SCRIPT_DIR = fileparts(mfilename('fullpath'));
+ROOT_DIR = fullfile(SCRIPT_DIR, '..', '..');
+addpath(genpath(fullfile(ROOT_DIR, 'controllers', 'ac', 'controller_cmpc_2d')));
+addpath(genpath(fullfile(ROOT_DIR, 'controllers', 'bc', 'safety_controller')));
+addpath(genpath(fullfile(ROOT_DIR, 'decision_module')));
+addpath(genpath(fullfile(ROOT_DIR, 'extended_BBS')));
+addpath(fullfile(ROOT_DIR, 'common'));
+addpath(fullfile(ROOT_DIR, 'experiment', 'dynamics'));
 
 %% params (defaults from main_bb_reverse.m)
 params.n = 15;
@@ -249,14 +251,14 @@ run_info.params_overrides = cfg.params_overrides;
 
 traj.meta = run_info;
 
-    %% Optional plotting
-    if cfg.enable_plot
-        displayTraj(x, y, vx, vy, policy);
-        title(['Black-Box Simplex Case ', num2str(cfg.case_id)], 'FontSize', 17);
-    end
+%% Optional plotting
+if cfg.enable_plot
+    displayTraj(x, y, vx, vy, policy);
+    title(['Black-Box Simplex Case ', num2str(cfg.case_id)], 'FontSize', 17);
+end
 
-    %% Save
-    if cfg.save_mat
+%% Save
+if cfg.save_mat
     % output_root already contains the unique timestamp from the calling script
     out_dir = fullfile(cfg.output_root, ['case_', pad_case_id(cfg.case_id)]);
     if ~exist(out_dir, 'dir')

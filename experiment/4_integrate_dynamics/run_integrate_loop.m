@@ -11,6 +11,7 @@ addpath(fullfile(PROJECT_ROOT, 'common'));
 addpath(fullfile(PROJECT_ROOT, 'experiment', 'other')); % for check_collision
 addpath(genpath(fullfile(PROJECT_ROOT, 'experiment', 'dynamics', 'learned_dynamics')));
 addpath(fullfile(PROJECT_ROOT, 'experiment', 'data_collection')); % run_bb_reverse_once
+addpath(PROJECT_ROOT); % for gen_init_bb.m and other root tools
 
 report_timestamp = datestr(now, 'yyyy-mm-dd_HHMMSS');
 RUN_OUT_ROOT = fullfile(PROJECT_ROOT, 'traj', 'step4_integrate', report_timestamp);
@@ -39,8 +40,8 @@ d = dir(fullfile(TRAIN_OUT, '20*'));
 if isempty(d)
     error('No model directory found in %s', TRAIN_OUT);
 end
-[~, idx] = max([d.datenum]);
-LATEST_MODEL_DIR = fullfile(TRAIN_OUT, d(idx).name);
+[~, sorted_idx] = sort({d.name});
+LATEST_MODEL_DIR = fullfile(TRAIN_OUT, d(sorted_idx(end)).name);
 
 ONNX_PATH = fullfile(LATEST_MODEL_DIR, 'residual_model.onnx');
 STATS_PATH = fullfile(LATEST_MODEL_DIR, 'scaling_stats.json');
@@ -70,21 +71,74 @@ learned_model.func = @residual_net;
 learned_model.params_onnx = params_onnx;
 learned_model.stats = stats;
 
+%% 4.1 Consistency Check (Physical Parameters)
+PHYS_PATH = fullfile(LATEST_MODEL_DIR, 'physical_params.json');
+if exist(PHYS_PATH, 'file')
+    fprintf('--> Checking Physical Parameters Consistency...\n');
+    fid = fopen(PHYS_PATH);
+    raw = fread(fid, inf);
+    str = char(raw');
+    fclose(fid);
+    model_phys = jsondecode(str);
+    
+    % Get runtime defaults by a minimal run (1 step, no save)
+    check_cfg = struct('case_id', 0, 'enable_plot', false, 'save_mat', false);
+    check_cfg.params_overrides = struct('steps', 1);
+    [check_traj, ~] = run_bb_reverse_once(check_cfg);
+    runtime_params = check_traj.params;
+    
+    % Parameters to check
+    params_to_check = {'acc_scale', 'acc_bias', 'damping'};
+    epsilon = 1e-6;
+    mismatch = false;
+    
+    for p = 1:numel(params_to_check)
+        pname = params_to_check{p};
+        if isfield(model_phys, pname) && isfield(runtime_params, pname)
+            v_model = model_phys.(pname);
+            v_runtime = runtime_params.(pname);
+            if abs(v_model - v_runtime) > epsilon
+                fprintf('  [ERROR] Mismatch in %s: Model=%f, Runtime=%f\n', pname, v_model, v_runtime);
+                mismatch = true;
+            else
+                fprintf('  [OK] %s: %f\n', pname, v_model);
+            end
+        end
+    end
+    
+    if mismatch
+        error('Physical parameters mismatch between trained model and simulation! Please sync them in run_bb_reverse_once.m');
+    end
+else
+    warning('physical_params.json not found in model directory. Skipping consistency check.');
+end
+
 %% 5. Load Case Manifest
 output_root = fullfile(PROJECT_ROOT, 'traj', 'step3_collect');
 files = dir(fullfile(output_root, '**', 'manifest.mat'));
 if isempty(files)
     error('Manifest not found in %s', output_root);
 end
-[~, idx] = max([files.datenum]);
-manifest_mat = fullfile(files(idx).folder, files(idx).name);
+[~, sorted_idx] = sort({files.name});
+manifest_mat = fullfile(files(sorted_idx(end)).folder, files(sorted_idx(end)).name);
 
 fprintf('--> Using Case Manifest: %s\n', manifest_mat);
 S = load(manifest_mat);
 manifest = S.manifest;
 num_cases = numel(manifest);
 
-%% 6. Evaluate Loop
+% Initialize results manifest for data collection
+results_manifest = repmat(struct( ...
+    'case_id', 0, ...
+    'seed', 0, ...
+    'runtime_s', NaN, ...
+    'status', 'skipped', ...
+    'has_collision', false, ...
+    'num_collisions', 0, ...
+    'min_distance', NaN, ...
+    'message', '', ...
+    'output_file', ''), num_cases, 1);
+
 collision_cases = [];
 min_dist_overall = inf;
 
@@ -92,9 +146,6 @@ fprintf('\n开始执行 %d 个集成测试 Cases (使用 NN 替代 DM 预测)...
 fprintf('Parallel Execution: %d\n', use_parallel);
 
 if use_parallel
-    % Pre-allocate results to avoid messy parfor output if desired, 
-    % but here we'll use reduction variables for simplicity and consistency with the original version.
-    
     parfor i = 1:num_cases
         if ~strcmp(manifest(i).status, 'ok')
             continue;
@@ -117,9 +168,23 @@ if use_parallel
         cfg.params_overrides.learned_model = learned_model;
         
         fprintf('Running Case %03d...\n', cfg.case_id);
-        
+
+        % Pre-allocate a local structure to store parfor results
+        row = struct( ...
+            'case_id', manifest(i).case_id, ...
+            'seed', manifest(i).seed, ...
+            'runtime_s', NaN, ...
+            'status', 'ok', ...
+            'has_collision', false, ...
+            'num_collisions', 0, ...
+            'min_distance', NaN, ...
+            'message', '', ...
+            'output_file', '');
+
         try
-            [traj, ~] = run_bb_reverse_once(cfg);
+            [traj, run_info] = run_bb_reverse_once(cfg);
+            row.runtime_s = run_info.runtime_s;
+            row.output_file = run_info.output_file;
             
             % Check for Collisions Immediately
             x = traj.x; y = traj.y; n = traj.params.n;
@@ -133,15 +198,18 @@ if use_parallel
                     end
                 end
             end
+            row.min_distance = min_dist_case;
             
             % Reduction Variables
             min_dist_overall = min(min_dist_overall, min_dist_case);
             
             [collision_info, has_collision] = check_collision(traj);
+            row.has_collision = has_collision;
+            row.num_collisions = numel(collision_info);
             
             if has_collision
                 fprintf('Case %03d: [COLLISION] 碰撞次数: %d | 最小距离: %.4f\n', ...
-                    cfg.case_id, numel(collision_info), min_dist_case);
+                    cfg.case_id, row.num_collisions, min_dist_case);
                 collision_cases = [collision_cases; manifest(i).case_id];
             else
                 fprintf('Case %03d: [SAFE]      最小距离: %.4f\n', cfg.case_id, min_dist_case);
@@ -149,7 +217,10 @@ if use_parallel
             
         catch ME
             fprintf('Case %03d: [ERROR] 失败: %s\n', manifest(i).case_id, ME.message);
+            row.status = 'failed';
+            row.message = ME.message;
         end
+        results_manifest(i) = row;
     end
 else
     for i = 1:num_cases
@@ -174,9 +245,22 @@ else
         cfg.params_overrides.learned_model = learned_model;
         
         fprintf('Running Case %03d... ', cfg.case_id);
-        
+
+        row = struct( ...
+            'case_id', manifest(i).case_id, ...
+            'seed', manifest(i).seed, ...
+            'runtime_s', NaN, ...
+            'status', 'ok', ...
+            'has_collision', false, ...
+            'num_collisions', 0, ...
+            'min_distance', NaN, ...
+            'message', '', ...
+            'output_file', '');
+
         try
-            [traj, ~] = run_bb_reverse_once(cfg);
+            [traj, run_info] = run_bb_reverse_once(cfg);
+            row.runtime_s = run_info.runtime_s;
+            row.output_file = run_info.output_file;
             
             % Check for Collisions Immediately
             x = traj.x; y = traj.y; n = traj.params.n;
@@ -190,14 +274,17 @@ else
                     end
                 end
             end
+            row.min_distance = min_dist_case;
             
             min_dist_overall = min(min_dist_overall, min_dist_case);
             
             [collision_info, has_collision] = check_collision(traj);
+            row.has_collision = has_collision;
+            row.num_collisions = numel(collision_info);
             
             if has_collision
                 fprintf('[COLLISION] 碰撞次数: %d | 最小距离: %.4f\n', ...
-                    numel(collision_info), min_dist_case);
+                    row.num_collisions, min_dist_case);
                 collision_cases = [collision_cases; manifest(i).case_id];
             else
                 fprintf('[SAFE]      最小距离: %.4f\n', min_dist_case);
@@ -205,7 +292,10 @@ else
             
         catch ME
             fprintf('[ERROR] 失败: %s\n', ME.message);
+            row.status = 'failed';
+            row.message = ME.message;
         end
+        results_manifest(i) = row;
     end
 end
 
@@ -221,3 +311,14 @@ else
     fprintf('恭喜！所有采用Learned Dynamics的轨迹均未发现碰撞。\n');
 end
 fprintf('========================================\n');
+
+%% 8. Save Manifest
+manifest = results_manifest; % Rename for compatibility
+manifest_mat = fullfile(RUN_OUT_ROOT, 'manifest.mat');
+save(manifest_mat, 'manifest');
+
+manifest_csv = fullfile(RUN_OUT_ROOT, 'manifest.csv');
+T = struct2table(manifest);
+writetable(T, manifest_csv);
+
+fprintf('Integration manifest saved to: %s\n', RUN_OUT_ROOT);

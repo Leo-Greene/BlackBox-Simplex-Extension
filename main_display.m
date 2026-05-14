@@ -3,8 +3,11 @@ clc
 clear;
 close all;
 
+script_dir = fileparts(mfilename('fullpath'));
+project_root = script_dir;
+
 %% add paths
-addpath(genpath('common'));
+addpath(genpath(fullfile(project_root, 'common')));
 
 %% Some on/off options
 Description = ''; % Added to the output folder name.
@@ -53,20 +56,25 @@ BB_fail_pause_duration = 0;
 
 %% Data source
 traj_num = 1; 
-%traj_path = 'C:\Users\sanaz\Documents\Projects\BB-simplex-master\traj\traj_bb [2022-11-09]';
-traj_path = 'traj\traj_bb [2023-01-24]_1'; % 15 agent simple COMMENT by lzj: 这个路径是运行main_bb_reverse之后数据保存的路径，每次都要手动修改
+traj_root = fullfile(project_root, 'traj');
+traj_dirs = dir(fullfile(traj_root, 'traj_bb*'));
+traj_dirs = traj_dirs([traj_dirs.isdir]);
+traj_dirs = traj_dirs(~ismember({traj_dirs.name}, {'.', '..'}));
 
+if isempty(traj_dirs)
+    error('No trajectory folders found under %s.', traj_root);
+end
 
+[~, latest_idx] = max([traj_dirs.datenum]);
+traj_path = fullfile(traj_root, traj_dirs(latest_idx).name);
+traj_name = [traj_dirs(latest_idx).name, '.mat'];
 
-[newStr, matches] = split(traj_path, '\');
-traj_name = [cell2mat(newStr(end)), '.mat']; 
-
-save_to = [traj_path '\Results\'];
+save_to = fullfile(traj_path, 'Results');
 mkdir(save_to);
 destPath = save_to;
 
 %% Load trajectory Data - from matlab code, save files, passes on: x, y, vx, vy, accx, accy, policy
-load([traj_path '\' traj_name]);
+load(fullfile(traj_path, traj_name));
 x = traj(traj_num).x;
 y = traj(traj_num).y;
 vx = traj(traj_num).vx;
@@ -88,10 +96,10 @@ end
 
 cur_date = datestr(datetime,'(yyyy-mm-dd, hh-MM)');
 dirName = [cur_date ' ' num2str(params.n) '_' num2str(params.steps) '_' num2str(traj_num) '_' Description];
-mkdir([save_to dirName]);
+mkdir(fullfile(save_to, dirName));
 
 %% Set Video options 
-videoName = [destPath dirName '/' dirName '-2'];
+videoName = fullfile(destPath, dirName, [dirName '-2']);
 myVideo = VideoWriter(videoName,"Uncompressed AVI");
 fastForwardRate = 0.7;
 myVideo.FrameRate = min(30,fastForwardRate * (1/params.dt));
@@ -103,7 +111,7 @@ skip = skip_1 + 1;
 %% draw and save trajectory
 fig_traj = figure;
 displayTraj( x, y ,vx, vy, params.switch_step);
-saveas(gcf, [destPath dirName '/' 'trajectory' '.jpg']);
+saveas(gcf, fullfile(destPath, dirName, 'trajectory.jpg'));
 
 %% Graphs
 f1 = figure;
@@ -175,9 +183,9 @@ end
 % i = i + 1;
 
 %% Save Plots
-saveas(f1, [destPath dirName '/' 'combined_plots' '.jpg']);
+saveas(f1, fullfile(destPath, dirName, 'combined_plots.jpg'));
 
-savefig(f1, [destPath dirName '/' 'combined_plots']);
+savefig(f1, fullfile(destPath, dirName, 'combined_plots'));
 
 %% Show Video
 if showVideo

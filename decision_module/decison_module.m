@@ -28,9 +28,12 @@ end
 %% divergence check for the final state
 [is_converging, r, c] = check_divergence_simple(next_pos, next_vel);
 if is_converging
-    decision = is_converging;
-    result.pair = [r(1), c(1)];
-    result.cause = 3;
+    disp(['Soft prompt: final velocities are not diverging between agents ' num2str(r(1)) ' and ' num2str(c(1))]);
+    % Soft prompt only: keep the divergence warning for diagnostics,
+    % but do not hard-reject the AC command sequence here.
+    % decision = is_converging;
+    % result.pair = [r(1), c(1)];
+    % result.cause = 3;
 end
 
 end

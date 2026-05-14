@@ -12,7 +12,7 @@ while ~done
     else
         d_n = dir_name;
     end
-    dest_path = [dir_path d_n];
+    dest_path = fullfile(dir_path, d_n);
 
     [~, msg] = mkdir(dest_path);
     

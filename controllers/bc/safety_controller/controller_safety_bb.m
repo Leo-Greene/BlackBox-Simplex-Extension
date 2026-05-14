@@ -25,22 +25,9 @@ opt.OutputFcn = @out_function;
     lb = -params.amax * ones(2*params.n*params.h_bc,1);
     ub = params.amax * ones(2*params.n*params.h_bc,1);
 
-%     u_init = [init_point(2*params.n+1:end); (params.amax/sqrt(2)) * rand(2*params.n,1)];
-%     u_init = zeros(2 * params.n * params.h, 1);
     u_init = 2 * rand(2 * params.n * params.h_bc, 1) - 1;
     
-    
-%     rng default % For reproducibility
-%     gs = GlobalSearch;
-%     cost = @(u)cost_sum(u, pos, vel, params);
-%     constraint = @(u)constraints(u, params);
-%     problem = createOptimProblem('fmincon','x0',u_init,...
-%     'objective',cost,'lb',lb,'ub',ub, 'nonlcon', constraint, 'options', opt);
-%     [u, fit_val] = run(gs,problem);
-%     exit_flag = 0;
-    
     [u, fit_val, exit_flag] = fmincon(@(u)cost_sum_bb(u, pos, vel, params),u_init,[],[],[],[],lb,ub,@(u)constraints_bb(u, params),opt);
-%     [u, fit_val, exit_flag] = multi_start(pos, vel, params, opt, 4);
 
 %% Solution is processed
     a_h = zeros(params.n, 2, params.h_bc+1);
