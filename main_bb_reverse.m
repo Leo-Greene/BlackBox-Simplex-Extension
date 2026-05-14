@@ -27,7 +27,7 @@ params.dt = 0.3;
 params.ct = 0.3;
 params.h_ac = 10;
 params.h_bc = 10;
-params.steps = 60;
+params.steps = 95;
 
 params.amax = 1.5; %1.5
 params.a_max = params.amax;
@@ -56,17 +56,19 @@ params.nonlinear_drift = false;
 params.noise_std = 0;
 
 % Process noise parameters
-params.epsilon_w_pos = 0.1*params.vmax*params.dt; % 位置的过程噪声边界 (米)：最大速度下百分之十的误差
+params.epsilon_w_pos = 0.05*params.vmax*params.dt; % 位置的过程噪声边界 (米)：最大速度下百分之五的误差
 params.sigma_obs_pos = params.epsilon_w_pos / 3;  % 假设 epsilon_w_pos 对应 3-sigma 边界 (99.7% 置信度)
 
 % Sensor noise parameters: 满足高斯噪声分布，通过估计得到的最大噪声边界估算得到高斯分布标准差
 params.epsilon_v_pos = 0.05*params.dmin; % 观测位置噪声边界 (米)：机器人最小距离百分之五的误差
 params.sigma_obs_pos = params.epsilon_v_pos / 3;  % 假设 epsilon_v_pos 对应 3-sigma 边界 (99.7% 置信度)
-params.epsilon_v_vel = 0.1*params.vmax; % 观测速度噪声标准差 (米/秒)：最大速度的百分之十
+params.epsilon_v_vel = 0.05*params.vmax; % 观测速度噪声标准差 (米/秒)：最大速度的百分之五
 params.sigma_obs_vel = params.epsilon_v_vel / 3;  % 假设 epsilon_v_vel 对应 3-sigma 边界 (99.7% 置信度)
 
-% 置信度
-params.confidence = 0.95;
+% DM安全检查参数
+params.confidence = 0.9;
+params.gamma = 0.6;
+params.sensing_range = 4.0; % DM的感知截断距离：超过此距离认为绝对安全，不施加防碰撞检查
 
 %% Predator params
 params.predator = 0;
@@ -173,20 +175,20 @@ for t = 1:params.steps  % 1) run optimizer 2) update instruction 3) run dynamics
     end
 
     % Sensor observation: controllers and decision module see noisy states.
-    % for i = 1:params.n
-    %     % --- 生成 2D 高斯位置噪声 v_i ---
-    %     % randn(2,1) 会直接生成 2x1 的标准正态分布 [N(0,1); N(0,1)]
-    %     % 乘以 sigma_obs 后，就变成了协方差矩阵为 sigma_obs^2 * I 的 2D 高斯噪声！
-    %     v_i_pos = params.sigma_obs_pos * randn(2, 1); 
-    %     v_i_vel = params.sigma_obs_vel * randn(2, 1);
+    for i = 1:params.n
+        % --- 生成 2D 高斯位置噪声 v_i ---
+        % randn(2,1) 会直接生成 2x1 的标准正态分布 [N(0,1); N(0,1)]
+        % 乘以 sigma_obs 后，就变成了协方差矩阵为 sigma_obs^2 * I 的 2D 高斯噪声！
+        v_i_pos = params.sigma_obs_pos * randn(2, 1); 
+        v_i_vel = params.sigma_obs_vel * randn(2, 1);
         
-    %     % 将观测噪声叠加到真实位置上，形成观测位置
-    %     hat_pos(:, i) = pos(:, i) + v_i_pos;
-    %     hat_vel(:, i) = vel(:, i) + v_i_vel;
-    % end
-    % 暂时不考虑噪声，检验决策模块和安全控制器的功能
-    hat_pos = pos;
-    hat_vel = vel;
+        % 将观测噪声叠加到真实位置上，形成观测位置
+        hat_pos(:, i) = pos(:, i) + v_i_pos;
+        hat_vel(:, i) = vel(:, i) + v_i_vel;
+    end
+    % % 暂时不考虑噪声，检验决策模块和安全控制器的功能
+    % hat_pos = pos;
+    % hat_vel = vel;
     
     if mod(t - 1, controller_run) == 0  % run optimizer every controller_run steps
         
@@ -274,8 +276,8 @@ for t = 1:params.steps  % 1) run optimizer 2) update instruction 3) run dynamics
     
     %[pos, vel] = stochastic_dynamics(pos, vel, acc, params, 0.02, 0.05);
     %[pos, vel] = true_dynamics(pos, vel, acc, params);
-    [pos, vel] = dynamics(pos, vel, acc, params);
-    % [pos, vel] = plant_dynamics(pos, vel, acc, params);
+    % [pos, vel] = dynamics(pos, vel, acc, params);
+    [pos, vel] = plant_dynamics(pos, vel, acc, params);
     x(t+1,:) = pos(1,:);
     y(t+1,:) = pos(2,:);
     vx(t+1,:) = vel(1,:);

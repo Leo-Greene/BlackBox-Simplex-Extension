@@ -21,8 +21,15 @@ action_number = min(action_number, size(prev_seq, 3));
 
 while(decision)
     
-    c1 = int64(result.pair(1));
-    c2 = int64(result.pair(2));
+    c1 = result.pair(1);
+    c2 = result.pair(2);
+
+    if isempty(c1) || isempty(c2) || ~isfinite(c1) || ~isfinite(c2) || c1 < 1 || c2 < 1 || c1 > params.n || c2 > params.n
+        warning('[BC] Invalid collision pair indices: %s. Using AC command for this step.', mat2str(result.pair));
+        acc_out = a_ac;
+        prev_seq_out = a_h;
+        return;
+    end
 
     % avoid loop
     if  visited(c1(1)) == 1 &&  visited(c2(1)) == 1
