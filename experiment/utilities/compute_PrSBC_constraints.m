@@ -90,14 +90,29 @@ function [A_sbc, b_sbc] = compute_PrSBC_constraints(pos, vel, params)
             % =========================================================
             % 步骤 B: 噪声参数与概率边界计算
             % =========================================================
+            % sigma_obs = params.sigma_obs_pos;  
+            % epsilon_w = params.epsilon_w_pos;  
+
+            % sigma_total_sq = 2 * sigma_obs^2 + epsilon_w^2;
+            % sigma_total = sqrt(sigma_total_sq);
+
+            % % 瑞利分布逆函数：计算出最坏情况下的概率边界半径
+            % epsilon_total = sigma_total * sqrt(-2 * log(1 - Confidence));
             sigma_obs = params.sigma_obs_pos;  
             epsilon_w = params.epsilon_w_pos;  
 
+            % 两个独立高斯分布相减，方差相加
             sigma_total_sq = 2 * sigma_obs^2 + epsilon_w^2;
             sigma_total = sqrt(sigma_total_sq);
 
-            % 瑞利分布逆函数：计算出最坏情况下的概率边界半径
-            epsilon_total = sigma_total * sqrt(-2 * log(1 - Confidence));
+            % --- 破除保守性：1D 单边高斯投影 ---
+            % 我们只关心噪声将两车"推近"的那一个维度的分量 (1D Gaussian)
+            % 使用标准正态分布的逆函数计算单边置信度 (One-sided confidence interval)
+            % erfinv(2*p - 1) * sqrt(2) 是 MATLAB 中计算正态分位数的标准写法，无需统计工具箱
+            % 如果 Confidence = 0.95， quantile_1D 约为 1.645 (远小于原先的 2.447)
+            quantile_1D = sqrt(2) * erfinv(2 * Confidence - 1);
+            
+            epsilon_total = sigma_total * quantile_1D;
 
             % ---------------------------------------------------------
             % (原有的 noise_penalty 柯西-施瓦茨惩罚被移除)

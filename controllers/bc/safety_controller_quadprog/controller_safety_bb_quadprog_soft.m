@@ -90,7 +90,6 @@ function [a, fit_val, exit_flag, prev_sol, history, a_h] = controller_safety_bb_
     % 2.3 速度方向惩罚代价 (Orientation Cost) -> || V_pred - V_des ||^2
     % V_pred = Bv*U + V_base;  我们要最小化 || Bv*U + (V_base - V_des) ||^2
     E_v = V_base - V_des;
-    % 假设 params.w_orient 是你在外部定义的权重
     H_orient = 2 * params.w_orient * (Bv' * Bv); 
     f_orient = 2 * params.w_orient * (Bv' * E_v);
 
@@ -119,7 +118,7 @@ function [a, fit_val, exit_flag, prev_sol, history, a_h] = controller_safety_bb_
     N_vars_total = N_vars + n_constraints;
 
     % 2. 构造新的目标函数 H_new, f_new
-    rho = 1e6; % 惩罚系数，建议取 1e5 ~ 1e8 之间
+    rho = 1e8; % 惩罚系数，建议取 1e5 ~ 1e8 之间
     H_new = blkdiag(H, 2 * rho * eye(n_constraints)); 
     f_new = [f; zeros(n_constraints, 1)];
 
@@ -135,6 +134,15 @@ function [a, fit_val, exit_flag, prev_sol, history, a_h] = controller_safety_bb_
     % U 的边界保持不变，epsilon 必须 >= 0
     lb_new = [lb; zeros(n_constraints, 1)];
     ub_new = [ub; inf * ones(n_constraints, 1)];
+
+    % idx_end = (params.h_bc - 1) * dim * n + 1 : params.h_bc * dim * n;
+
+    % Aeq_term = Bv(idx_end, :);
+    % beq_term = -V_base(idx_end);
+
+    % Aeq_term_pad = [Aeq_term, zeros(length(idx_end), n_constraints)];
+
+    % 调用 quadprog 时，传入 Aeq 和 beq
 
     % 5. 调用求解器
     if ~isempty(opt)

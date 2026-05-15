@@ -1,6 +1,8 @@
 clc
 clear
+clear functions
 close all
+rng(42); % For reproducibility of random initial conditions
 
 project_root = fileparts(mfilename('fullpath'));
 
@@ -11,6 +13,7 @@ project_root = fileparts(mfilename('fullpath'));
 % addpath(genpath(fullfile(project_root, 'controllers', 'bc', 'safety_controller')));
 addpath(genpath(fullfile(project_root, 'controllers', 'ac', 'controller_cmpc_2d_quadprog')));
 addpath(genpath(fullfile(project_root, 'controllers', 'bc', 'safety_controller_quadprog')));
+addpath(genpath(fullfile(project_root, 'controllers', 'PrSBC_filter')));
 addpath(genpath(fullfile(project_root, 'decision_module')));
 addpath(genpath(fullfile(project_root, 'extended_BBS')));
 addpath(fullfile(project_root, 'common'));
@@ -27,7 +30,7 @@ params.dt = 0.3;
 params.ct = 0.3;
 params.h_ac = 10;
 params.h_bc = 10;
-params.steps = 95;
+params.steps = 80;
 
 params.amax = 1.5; %1.5
 params.a_max = params.amax;
@@ -36,10 +39,10 @@ params.v_max = params.vmax;
 
 % Safety property
 params.dmin = 1.7;
-params.R_safe = params.dmin;
+params.R_safe = 1.9;
 
 % inital configuration
-params.diameter = 10;
+params.diameter = 15;
 params.switch_step = 1;
 
 params.ws = 10000; %1800
@@ -56,18 +59,18 @@ params.nonlinear_drift = false;
 params.noise_std = 0;
 
 % Process noise parameters
-params.epsilon_w_pos = 0.05*params.vmax*params.dt; % 位置的过程噪声边界 (米)：最大速度下百分之五的误差
+params.epsilon_w_pos = 0.2*params.vmax*params.dt; % 位置的过程噪声边界 (米)：最大速度下百分之五的误差
 params.sigma_obs_pos = params.epsilon_w_pos / 3;  % 假设 epsilon_w_pos 对应 3-sigma 边界 (99.7% 置信度)
 
 % Sensor noise parameters: 满足高斯噪声分布，通过估计得到的最大噪声边界估算得到高斯分布标准差
-params.epsilon_v_pos = 0.05*params.dmin; % 观测位置噪声边界 (米)：机器人最小距离百分之五的误差
+params.epsilon_v_pos = 0.2*params.dmin; % 观测位置噪声边界 (米)：机器人最小距离百分之五的误差
 params.sigma_obs_pos = params.epsilon_v_pos / 3;  % 假设 epsilon_v_pos 对应 3-sigma 边界 (99.7% 置信度)
-params.epsilon_v_vel = 0.05*params.vmax; % 观测速度噪声标准差 (米/秒)：最大速度的百分之五
+params.epsilon_v_vel = 0.2*params.vmax; % 观测速度噪声标准差 (米/秒)：最大速度的百分之五
 params.sigma_obs_vel = params.epsilon_v_vel / 3;  % 假设 epsilon_v_vel 对应 3-sigma 边界 (99.7% 置信度)
 
 % DM安全检查参数
 params.confidence = 0.9;
-params.gamma = 0.6;
+params.gamma = 0.4;
 params.sensing_range = 4.0; % DM的感知截断距离：超过此距离认为绝对安全，不施加防碰撞检查
 
 %% Predator params
@@ -244,6 +247,18 @@ for t = 1:params.steps  % 1) run optimizer 2) update instruction 3) run dynamics
 
                 bc_counter = bc_counter + 1;
 
+                % if bc_counter > size(prev_seq, 3)
+                %     warning('BC counter exceeded the length of the previous sequence. The acceleration command will be set to zero to avoid index out of bounds. This may indicate that the decision module is not resolving the collision properly.');
+                %     acc = zeros(2, params.n);
+                % else
+                %     action_number = min(bc_counter, size(prev_seq, 3));
+                
+                %     %acc = prev_seq(:,:,action_number)';
+                %     [acc, prev_seq] = resolve_collision(result, pos, vel, params, prev_seq, a_ac, a_h, action_number, t);
+                % end
+                
+                % bc_counter = bc_counter + 1;
+
             else
                 mde = 1;
                 bc_counter = 1;
@@ -273,7 +288,21 @@ for t = 1:params.steps  % 1) run optimizer 2) update instruction 3) run dynamics
     else
         acc = [ax(t, :); ay(t, :)];
     end
+
+    % 1. 将 DM (船长) 选出的名义指令作为期望目标传入 params
+    params.u_cmd = acc; 
     
+    % 2. 召唤舵手：在满足绝对安全的空间内，寻找离 u_cmd 最近的动作
+    % 注意这里调用的是我们上一轮写好的单步预测过滤器
+    [acc_safe, ~, filter_exit_flag] = prcbc_filter(pos, vel, params, []);
+    
+    % 3. 结果核验与赋值
+    if filter_exit_flag >= 0
+        acc = acc_safe; % 正常微调，应用安全的指令
+    else
+        warning('第 %d 步 PrSBC Filter 求解失败! 维持原指令或采取紧急刹车.', t);
+        % 此处如果无解(由于软约束存在，几乎不可能发生)，你可以选择保持原 acc，或者 acc = zeros(2, n);
+    end
     %[pos, vel] = stochastic_dynamics(pos, vel, acc, params, 0.02, 0.05);
     %[pos, vel] = true_dynamics(pos, vel, acc, params);
     % [pos, vel] = dynamics(pos, vel, acc, params);
