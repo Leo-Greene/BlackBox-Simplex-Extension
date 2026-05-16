@@ -1,0 +1,13 @@
+PrSBC Batch Test Report
+Runs: 20
+Timestamp: 2026-05-16 10:14:52
+
+Metric                     | None           | PrSBC          | Delta     
+------------------------------------------------------------------------
+Collision rate             | 80.00%         | 0.00%          | -80.00%   
+Collision steps/run        | 10.2000        | 0.0000         | -10.2000  
+Min distance (min)         | 0.0907         | 2.0250         | 1.9343    
+Min distance (mean)        | 2.9204         | 3.3129         | 0.3924    
+Control deviation          | 0.3524         | 0.1932         | -0.1592   
+Mean MPC cost              | -18603.2512    | -8292.2904     | 10310.9608
+Goal success rate          | 50.00%         | 75.00%         | 25.00%    
