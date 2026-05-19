@@ -78,6 +78,7 @@ if exist(METRICS_PATH, 'file')
     metrics = jsondecode(str);
     residual_variance = metrics.residual_variance;
 else
+    fprintf('[FALLBACK] validation_metrics.json not found at %s. Falling back to default residual_variance = %f (%f^2).\n', METRICS_PATH, 0.05^2, 0.05);
     residual_variance = 0.05^2;
 end
 fprintf('--> Loaded Data-Driven Process Noise Variance: %.6f\n\n', residual_variance);
@@ -87,7 +88,7 @@ cfg = struct();
 cfg.case_id = 5; % Choose a specific diagnostic case
 cfg.seed = 42;
 cfg.enable_plot = false; % Disable plots to keep it clean
-cfg.save_mat = false;
+cfg.save_mat = true;
 cfg.output_root = RUN_OUT_ROOT;
 
 cfg.params_overrides = struct();

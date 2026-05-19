@@ -68,6 +68,21 @@ function [x_next, residual] = dynamics_learned(x_nominal, x_residual, u, model_f
     % 3. 结果合成
     x_next = x_nom + residual;
     
+    % ==========================================
+    % 新增：全局记录器，用于在 dynamics_learned 中记录每一步残差网络的输出和失配模型的输出
+    global dynamics_log;
+    if isstruct(dynamics_log) && isfield(dynamics_log, 'enabled') && dynamics_log.enabled
+        entry = struct();
+        entry.x_nominal = x_nominal;
+        entry.x_residual = x_residual;
+        entry.u = u;
+        entry.x_nom = x_nom;
+        entry.residual = residual;
+        entry.x_next = x_next;
+        dynamics_log.calls{end+1} = entry;
+    end
+    % ==========================================
+    
     % 额外的保护：叠加残差后再次强制限速，确保网络输出不会违反物理常识
     vx_final = x_next(2*n+1 : 3*n);
     vy_final = x_next(3*n+1 : 4*n);

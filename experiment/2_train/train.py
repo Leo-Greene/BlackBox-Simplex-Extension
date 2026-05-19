@@ -266,6 +266,24 @@ def compute_mixed_loss(model, x_seq, x_true_seq, u_seq, r_lbl_seq, stats_t, hori
             x_c, u_c, dt=dt, vmax=vmax, pFactor=pFactor, predator=predator, n=n, alpha_v=alpha_v, alpha_x=alpha_x
         ) + r_p
         
+        # FIX 2-A (2026-05-19): Mirror the second vmax clamp applied in dynamics_learned.m (L87-101).
+        # Without this, training rollout and MATLAB inference have different output spaces:
+        #   - MATLAB: clamps velocity after (x_nom + residual)
+        #   - Python: previously did NOT clamp after (nominal + r_p)
+        # This asymmetry biased training in high-speed regimes where residual dvx > 0 near saturation.
+        vx_p = x_next_pred[:, 2*n : 3*n]
+        vy_p = x_next_pred[:, 3*n : 4*n]
+        v_mag_p = torch.sqrt(vx_p**2 + vy_p**2 + 1e-8)
+        vmax_p = torch.full_like(v_mag_p, vmax)
+        if predator > 0:
+            vmax_p[:, -1] = vmax * pFactor
+        scale_p = torch.clamp(vmax_p / v_mag_p, max=1.0)
+        x_next_pred = torch.cat([
+            x_next_pred[:, :2*n],
+            vx_p * scale_p,
+            vy_p * scale_p
+        ], dim=-1)
+
         # 全归一化对齐监督，杜绝随机噪声污染
         x_next_pred_norm = normalize(x_next_pred, x_true_m, x_true_s)
         step_err = torch.mean((x_next_pred_norm - x_true_seq[:, t+1, :])**2)

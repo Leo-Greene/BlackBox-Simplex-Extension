@@ -51,6 +51,7 @@ addpath(genpath(fullfile(ROOT_DIR, 'extended_BBS')));
 addpath(fullfile(ROOT_DIR, 'common'));
 addpath(genpath(fullfile(ROOT_DIR, 'experiment', 'dynamics')));
 addpath(genpath(fullfile(ROOT_DIR, 'experiment', 'utilities')));
+addpath(ROOT_DIR);
 
 %% params (defaults from main_bb_reverse.m)
 params.n = 15;
@@ -119,6 +120,18 @@ opt.LinearSolver = 'sparse';    % 启用稀疏矩阵求解器，提升计算效�
 [posi, veli, params.tgt] = gen_init_bb(params);
 
 %% Result buffers
+% ==========================================
+% 初始化全局记录器与数据缓冲
+global dynamics_log;
+dynamics_log = struct();
+dynamics_log.enabled = true;
+dynamics_log.calls = {};
+
+traj_x_nom_pred = zeros([params.steps, 4 * params.n]);
+traj_residual_pred = zeros([params.steps, 4 * params.n]);
+traj_x_nn_pred = zeros([params.steps, 4 * params.n]);
+% ==========================================
+
 x = zeros([params.steps, params.n]);
 y = zeros([params.steps, params.n]);
 vx = zeros([params.steps, params.n]);
@@ -186,6 +199,7 @@ for t = 1:params.steps
                 mde = 2;
                 if isempty(prev_seq)
                     % No previous BC sequence available yet; hold position until a valid sequence is available.
+                    fprintf('[FALLBACK] Simplex Switch triggered at step %d but prev_seq is empty! Falling back to Zero Command (braking).\n', t);
                     prev_seq = a_h;
                     acc = zeros(size(a_ac));
                 else
@@ -205,6 +219,7 @@ for t = 1:params.steps
         else
             if decision
                 if isempty(prev_seq)
+                    fprintf('[FALLBACK] Simplex BC Active at step %d but prev_seq is empty! Falling back to Zero Command (braking).\n', t);
                     prev_seq = a_h;
                     acc = zeros(size(a_ac));
                 else
@@ -239,7 +254,7 @@ for t = 1:params.steps
             if filter_exit_flag >= 0
                 acc = acc_safe; % 正常微调，应用安全的指令
             else
-                warning('第 %d 步 PrSBC Filter 求解失败! 维持原指令或采取紧急刹车.', t);
+                warning('[FALLBACK] 第 %d 步 PrSBC Filter 求解失败! 维持原指令或采取紧急刹车.', t);
             end
         else
             % fprintf('第 %d 步 nn PrSBC Filter 求解中(NN)...', t);
@@ -251,7 +266,7 @@ for t = 1:params.steps
             if filter_exit_flag >= 0
                 acc = acc_safe; % 正常微调，应用安全的指令
             else
-                warning('第 %d 步 PrSBC Filter 求解失败! 维持原指令或采取紧急刹车.', t);
+                warning('[FALLBACK] 第 %d 步 PrSBC Filter (NN) 求解失败! 维持原指令或采取紧急刹车.', t);
             end
         end 
     end     
@@ -265,6 +280,46 @@ for t = 1:params.steps
             acc_actual = acc_actual + params.explore_noise_std .* randn(size(acc_actual));
         end
     end
+
+    % ==========================================
+    % 新增：记录每一步的名义/失配模型预测与残差网络预测值 (以实际应用动作计算)
+    if isfield(params, 'use_learned_dynamics') && params.use_learned_dynamics && isfield(params, 'learned_model')
+        x_curr_vec = double([pos(1,:), pos(2,:), vel(1,:), vel(2,:)]);
+        u_curr_vec = double([acc_actual(1,:), acc_actual(2,:)]);
+        [x_next_pred, residual_pred] = dynamics_learned(x_curr_vec, x_curr_vec, u_curr_vec, ...
+            params.learned_model.func, params.learned_model.params_onnx, params.learned_model.stats, params);
+        
+        % 保存各部分的预测值到 buffer
+        traj_x_nom_pred(t, :) = x_next_pred - residual_pred;
+        traj_residual_pred(t, :) = residual_pred;
+        traj_x_nn_pred(t, :) = x_next_pred;
+    else
+        % 如果没有启用 NN 动力学，就用纯名义模型（即包含 alpha_v / alpha_x 的失配模型）
+        dt_val = params.dt;
+        alpha_x_val = 1.0;
+        alpha_v_val = 1.0;
+        if isfield(params, 'alpha_x'), alpha_x_val = params.alpha_x; end
+        if isfield(params, 'alpha_v'), alpha_v_val = params.alpha_v; end
+        
+        vx_nom_next = alpha_v_val * (vel + acc_actual * dt_val);
+        for j = 1:params.n
+            v_mag = norm(vx_nom_next(:, j));
+            vmax_j = params.vmax;
+            if isfield(params, 'predator') && params.predator && j == params.n
+                vmax_j = params.vmax * params.pFactor;
+            end
+            if v_mag > vmax_j
+                vx_nom_next(:, j) = vx_nom_next(:, j) * (vmax_j / v_mag);
+            end
+        end
+        px_nom_next = pos + alpha_x_val * (vx_nom_next * dt_val);
+        
+        x_nom_val = [px_nom_next(1,:), px_nom_next(2,:), vx_nom_next(1,:), vx_nom_next(2,:)];
+        traj_x_nom_pred(t, :) = x_nom_val;
+        traj_residual_pred(t, :) = zeros(1, 4 * params.n);
+        traj_x_nn_pred(t, :) = x_nom_val;
+    end
+    % ==========================================
 
     [pos, vel] = plant_dynamics(pos, vel, acc_actual, params);
 
@@ -316,6 +371,14 @@ traj.result = rslt;
 traj.policy = policy;
 traj.is_BC_active = is_BC_active;
 traj.episode_id = episode_id;
+
+% ==========================================
+% 新增：将记录的名义预测、残差预测、NN预测以及全局日志打包进 traj
+traj.x_nom_pred = traj_x_nom_pred;
+traj.residual_pred = traj_residual_pred;
+traj.x_nn_pred = traj_x_nn_pred;
+traj.dynamics_log = dynamics_log;
+% ==========================================
 
 run_info = struct();
 run_info.case_id = cfg.case_id;

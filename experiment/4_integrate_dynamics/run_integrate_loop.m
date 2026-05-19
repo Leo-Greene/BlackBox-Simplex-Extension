@@ -4,7 +4,7 @@ clc;
 clear;
 close all;
 
-%% 1. Path Setup
+%% 1. 路径设置 Path Setup
 PROJECT_ROOT = fullfile(fileparts(mfilename('fullpath')), '..', '..');
 addpath(genpath(fullfile(PROJECT_ROOT, 'decision_module')));
 addpath(fullfile(PROJECT_ROOT, 'common'));
@@ -17,7 +17,7 @@ report_timestamp = datestr(now, 'yyyy-mm-dd_HHMMSS');
 RUN_OUT_ROOT = fullfile(PROJECT_ROOT, 'traj', 'step4_integrate', report_timestamp);
 if ~exist(RUN_OUT_ROOT, 'dir'), mkdir(RUN_OUT_ROOT); end
 
-%% 3. Parallel Setup
+%% 3. 并行设置 Parallel Setup
 force_parallel = true;
 requested_workers = 0; 
 use_parallel = force_parallel && license('test', 'Distrib_Computing_Toolbox');
@@ -33,7 +33,7 @@ if use_parallel
     end
 end
 
-%% 4. Load Neural Network Model & Stats
+%% 4. 加载神经网络模型和统计数据 Load Neural Network Model & Stats
 fprintf('--> Initializing Learned Dynamics Module...\n');
 TRAIN_OUT = fullfile(PROJECT_ROOT, 'experiment', '2_train', 'out');
 d = dir(fullfile(TRAIN_OUT, '20*'));
@@ -80,7 +80,10 @@ if exist(METRICS_PATH, 'file')
     fclose(fid);
     metrics = jsondecode(str);
     learned_model.residual_variance = metrics.residual_variance;
+    fprintf('  [OK] Loaded validation_metrics.json. Residual Variance = %f\n', learned_model.residual_variance);
 else
+    warning('[Learned Dynamics] validation_metrics.json not found at: %s.\n  Falling back to default residual_variance = %f. This may slightly over- or under-estimate SBC safety limits.', ...
+        METRICS_PATH, 0.05^2);
     learned_model.residual_variance = 0.05^2; % Fallback variance
 end
 

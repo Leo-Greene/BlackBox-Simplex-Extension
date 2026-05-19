@@ -35,10 +35,27 @@ function [A_sbc, b_sbc] = compute_PrSBC_constraints_nn(pos, vel, params)
         
         % Data-Driven Process Noise from Validation Metrics
         if isfield(params, 'residual_variance') && isfield(params.learned_model, 'stats')
-            % Crucial Fix: validation_metrics.json contains the normalized validation loss (MSE).
-            % To convert the standard deviation back to physical units (meters), we must multiply by R_std(1).
-            epsilon_w = sqrt(params.residual_variance) * params.learned_model.stats.R_std(1);
+            % FIX B (2026-05-19): Use RMS of ALL 2n position-residual std-devs as the
+            % de-normalization scale, instead of the single R_std(1) scalar.
+            %
+            % Rationale:
+            %   - R_label layout: [dx_1..n, dy_1..n, dvx_1..n, dvy_1..n]
+            %   - PrSBC epsilon_w is a 2-D position uncertainty radius (meters).
+            %   - The position components occupy indices 1:2n in R_std.
+            %   - Taking the RMS over all 2n elements gives the isotropic L2-average
+            %     noise amplitude, consistent with the scalar Euclidean expansion in
+            %     the CBF formula: (R_safe + epsilon_total)^2.
+            %   - Using only R_std(1) was agent-1-x-biased and not representative
+            %     of the full population of pairwise distance uncertainties.
+            R_std_vec = params.learned_model.stats.R_std(:);
+            R_std_pos = R_std_vec(1 : 2*n);          % [dx_1..n, dy_1..n]
+            epsilon_w = sqrt(params.residual_variance) * sqrt(mean(R_std_pos.^2));
         else
+            persistent has_warned_variance_fallback;
+            if isempty(has_warned_variance_fallback)
+                warning('[FALLBACK] [PrSBC NN] Missing residual_variance or stats in params! Falling back to default epsilon_w = 0.05.');
+                has_warned_variance_fallback = true;
+            end
             epsilon_w = 0.05; % fallback
         end
         
@@ -60,7 +77,7 @@ function [A_sbc, b_sbc] = compute_PrSBC_constraints_nn(pos, vel, params)
         end
     else
         % Fallback to pure nominal mismatch
-        fprintf('[PrSBC NN] Fallback to pure nominal mismatch.\n');
+        fprintf('[FALLBACK] [PrSBC NN] Fallback to pure nominal mismatch.\n');
         epsilon_w = params.epsilon_w_pos; 
         for i = 1:n
             p_t = pos(:, i);

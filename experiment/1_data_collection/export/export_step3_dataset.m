@@ -181,16 +181,33 @@ end
 end
 
 function [pos_next, vel_next] = nominal_with_alpha(pos, vel, acc, params)
+% nominal_with_alpha - Compute one-step nominal prediction aligned with plant_dynamics.m.
+%
+% FIX (2026-05-19): Added vmax clamp AFTER the velocity update so that the
+% computed label  R = x_true_next - x_nom_next  reflects only the
+% alpha-mismatch residual and NOT velocity-saturation artifacts.
+% This matches the clamp logic in plant_dynamics.m (lines 9-21).
 dt = params.dt;
 alpha_v = 1.0;
 alpha_x = 1.0;
-if isfield(params, 'alpha_v')
-    alpha_v = params.alpha_v;
-end
-if isfield(params, 'alpha_x')
-    alpha_x = params.alpha_x;
-end
+if isfield(params, 'alpha_v'), alpha_v = params.alpha_v; end
+if isfield(params, 'alpha_x'), alpha_x = params.alpha_x; end
+
 vel_next = alpha_v .* (vel + acc * dt);
+
+% --- vmax clamp: aligned with plant_dynamics.m ---
+for j = 1:params.n
+    nv = norm(vel_next(:, j));
+    vmax_j = params.vmax;
+    if isfield(params, 'predator') && params.predator && j == params.n
+        vmax_j = params.vmax * params.pFactor;
+    end
+    if nv > vmax_j
+        vel_next(:, j) = vel_next(:, j) * (vmax_j / nv);
+    end
+end
+% --------------------------------------------------
+
 pos_next = pos + alpha_x .* (vel_next * dt);
 end
 

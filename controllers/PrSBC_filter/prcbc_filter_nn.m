@@ -30,7 +30,7 @@ function [a, fit_val, exit_flag, prev_sol, history, a_h] = prcbc_filter_nn(pos, 
         u_cmd = params.u_cmd; % 尺寸应为 2 x n
     else
         % 如果上层没有传，兜底设为 0 (刹车)
-        warning('params.u_cmd is missing! Fallback to zero command.');
+        warning('[FALLBACK] params.u_cmd is missing! Fallback to zero command.');
         u_cmd = zeros(dim, n); 
     end
     
@@ -99,7 +99,7 @@ function [a, fit_val, exit_flag, prev_sol, history, a_h] = prcbc_filter_nn(pos, 
     % =====================================================================
     if exit_flag < 0
         % 理论上加了软约束极少发生无解，除非输入数据包含 NaN 或 Inf
-        warning('[PrSBC Filter] QP Solver failed with exit_flag = %d. Using emergency stop.', exit_flag);
+        warning('[FALLBACK] [PrSBC Filter] QP Solver failed with exit_flag = %d. Using emergency stop.', exit_flag);
         a = zeros(dim, n);
         fit_val = 1e6;   
         prev_sol = u_init; 
