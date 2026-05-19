@@ -85,8 +85,9 @@ end
 % --- Step 2: 实现分层抽样 (Stratified Sampling) 确保 Split 分布均匀 ---
 
 unique_tags = {'default', 'init_perturb', 'geometry_perturb', 'boundary_focus'};
-train_ratio = 0.80;
-val_ratio = 0.20;
+train_ratio = 0.70;
+val_ratio = 0.15;
+% test_ratio 将自动占据剩余的 15%
 
 for t = 1:numel(unique_tags)
     tag_name = unique_tags{t};
@@ -98,6 +99,7 @@ for t = 1:numel(unique_tags)
     % 计算该组内的切分点
     n_train = round(n_tag * train_ratio);
     n_val = round(n_tag * val_ratio);
+    % 防止舍入导致总和溢出
     if n_train + n_val > n_tag
         n_val = max(0, n_tag - n_train);
     end
@@ -110,7 +112,7 @@ for t = 1:numel(unique_tags)
         elseif k <= (n_train + n_val)
             cases(case_idx).split = 'val';
         else
-            cases(case_idx).split = 'test';
+            cases(case_idx).split = 'test'; % 剩余的自然分配给 test
         end
     end
 end

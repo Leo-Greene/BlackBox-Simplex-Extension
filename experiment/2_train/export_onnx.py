@@ -17,7 +17,7 @@ class ResidualBlock(nn.Module):
     def forward(self, x): return self.act(x + self.net(x))
 
 class ResidualMLP(nn.Module):
-    def __init__(self, input_dim=90, output_dim=60, hidden_dim=256, depth=3):
+    def __init__(self, input_dim=4, output_dim=4, hidden_dim=128, depth=3):
         super().__init__()
         self.input_proj = nn.Sequential(nn.Linear(input_dim, hidden_dim), nn.LayerNorm(hidden_dim), nn.SiLU())
         self.blocks = nn.Sequential(*[ResidualBlock(hidden_dim) for _ in range(depth)])
@@ -32,6 +32,9 @@ def export_onnx():
     # 路径配置
     TRAIN_DIR = os.path.dirname(os.path.abspath(__file__))
     OUT_DIR = os.path.join(TRAIN_DIR, 'out')
+    CONFIG_PATH = os.path.join(TRAIN_DIR, 'config.json')
+    with open(CONFIG_PATH, 'r') as f:
+        cfg = json.load(f)
     
     # 1. 寻找最新文件夹 (20* 开头)
     subdirs = [os.path.join(OUT_DIR, d) for d in os.listdir(OUT_DIR) 
@@ -58,16 +61,21 @@ def export_onnx():
 
     # 从物理参数文件中读取 n 以确定维度
     physical_params_path = os.path.join(latest_dir, 'physical_params.json')
-    n = 15 # 默认后备值
+    n = int(cfg.get('n', 15))
     if os.path.exists(physical_params_path):
         with open(physical_params_path, 'r') as f:
             pp = json.load(f)
             n = int(pp.get('n', 15))
 
     # 2. 配置并加载模型
-    input_dim = 6 * n  # 4*n (X) + 2*n (U)
-    output_dim = 4 * n 
-    model = ResidualMLP(input_dim=input_dim, output_dim=output_dim, hidden_dim=256, depth=3)
+    input_dim = int(cfg['model_input_dim'])
+    output_dim = int(cfg['model_output_dim'])
+    model = ResidualMLP(
+        input_dim=input_dim,
+        output_dim=output_dim,
+        hidden_dim=int(cfg['hidden_dim']),
+        depth=int(cfg['depth'])
+    )
     
     # 加载权重
     print(f"Loading weights from {model_path}...")
@@ -76,8 +84,8 @@ def export_onnx():
     model.eval()
 
     # 3. 准备虚拟输入以便导出
-    dummy_x = torch.randn(1, 4 * n)
-    dummy_u = torch.randn(1, 2 * n)
+    dummy_x = torch.randn(1, input_dim // 2)
+    dummy_u = torch.randn(1, input_dim // 2)
 
     # 4. 导出 ONNX
     print(f"Exporting to ONNX...")

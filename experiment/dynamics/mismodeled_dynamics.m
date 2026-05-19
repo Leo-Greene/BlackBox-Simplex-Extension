@@ -11,9 +11,16 @@ function [pos_next, vel_next] = true_dynamics(pos, vel, acc, params)
 % 其中 d(x_k,u_k) 由以下因素构成：
 %   1) 参数失配（如有效加速度缩放）
 %   2) 速度阻尼（未建模摩擦）
-%   3) 小幅状态相关非线性漂移
 
 dt = params.dt;
+alpha_v = 1.0;
+alpha_x = 1.0;
+if isfield(params, 'alpha_v')
+    alpha_v = params.alpha_v;
+end
+if isfield(params, 'alpha_x')
+    alpha_x = params.alpha_x;
+end
 
 %% 1) 参数失配：真实执行加速度 != 名义输入加速度
 acc_actual = acc;
@@ -33,6 +40,9 @@ if isfield(params, 'damping') && params.damping > 0
     vel_next = vel_next - dt * params.damping * vel;
 end
 
+% Alpha mismatch on velocity update
+vel_next = alpha_v .* vel_next;
+
 %% 3) 与名义模型一致的速度限制
 for j = 1:params.n
     if params.predator && j == params.n
@@ -46,15 +56,7 @@ for j = 1:params.n
         vel_next(:, j) = (vmax_j / nv) * vel_next(:, j);
     end
 end
-
-%% 4) 位置更新：名义项 + 小幅非线性漂移
-pos_next = pos + dt * vel_next;
-
-if isfield(params, 'nonlinear_drift') && params.nonlinear_drift
-    for i = 1:params.n
-        drift = 0.001 * [sin(0.1 * pos(1,i)); cos(0.1 * pos(2,i))];
-        pos_next(:, i) = pos_next(:, i) + drift;
-    end
-end
+% Alpha mismatch on position update (Galilean invariant)
+pos_next = pos + alpha_x .* (vel_next * dt);
 
 end

@@ -29,8 +29,7 @@ traj/step5_prsbc/
 experiment/2_train/out/
 
 # 忽略验证输出的结果和日志
-experiment/validation/out/20*
-experiment/test/out/20*
+experiment/3_test_dynamics/out
 
 # OS
 .DS_Store

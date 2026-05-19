@@ -13,7 +13,7 @@ if isfield(params, 'use_learned_dynamics') && params.use_learned_dynamics
     u_vec = [cur_acc(1,:), cur_acc(2,:)];
     
     for k = 1:control_steps
-        [x_next_vec, ~] = dynamics_learned(x_vec, u_vec, ...
+        [x_next_vec, ~] = dynamics_learned(x_vec, x_vec, u_vec, ...
             params.learned_model.func, params.learned_model.params_onnx, params.learned_model.stats, params);
         x_vec = x_next_vec;
     end

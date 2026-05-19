@@ -10,7 +10,7 @@ addpath(genpath(fullfile(PROJECT_ROOT, 'decision_module')));
 addpath(fullfile(PROJECT_ROOT, 'common'));
 addpath(fullfile(PROJECT_ROOT, 'experiment', 'other')); % for check_collision
 addpath(genpath(fullfile(PROJECT_ROOT, 'experiment', 'dynamics', 'learned_dynamics')));
-addpath(fullfile(PROJECT_ROOT, 'experiment', 'data_collection')); % run_bb_reverse_once
+addpath(fullfile(PROJECT_ROOT, 'experiment', '1_data_collection')); % run_bb_reverse_once
 addpath(PROJECT_ROOT); % for gen_init_bb.m and other root tools
 
 report_timestamp = datestr(now, 'yyyy-mm-dd_HHMMSS');
@@ -35,7 +35,7 @@ end
 
 %% 4. Load Neural Network Model & Stats
 fprintf('--> Initializing Learned Dynamics Module...\n');
-TRAIN_OUT = fullfile(PROJECT_ROOT, 'experiment', 'train', 'out');
+TRAIN_OUT = fullfile(PROJECT_ROOT, 'experiment', '2_train', 'out');
 d = dir(fullfile(TRAIN_OUT, '20*'));
 if isempty(d)
     error('No model directory found in %s', TRAIN_OUT);
@@ -71,6 +71,19 @@ learned_model.func = @residual_net;
 learned_model.params_onnx = params_onnx;
 learned_model.stats = stats;
 
+% Read Validation Metrics JSON
+METRICS_PATH = fullfile(LATEST_MODEL_DIR, 'validation_metrics.json');
+if exist(METRICS_PATH, 'file')
+    fid = fopen(METRICS_PATH);
+    raw = fread(fid, inf);
+    str = char(raw');
+    fclose(fid);
+    metrics = jsondecode(str);
+    learned_model.residual_variance = metrics.residual_variance;
+else
+    learned_model.residual_variance = 0.05^2; % Fallback variance
+end
+
 %% 4.1 Consistency Check (Physical Parameters)
 PHYS_PATH = fullfile(LATEST_MODEL_DIR, 'physical_params.json');
 if exist(PHYS_PATH, 'file')
@@ -88,7 +101,7 @@ if exist(PHYS_PATH, 'file')
     runtime_params = check_traj.params;
     
     % Parameters to check
-    params_to_check = {'acc_scale', 'acc_bias', 'damping'};
+    params_to_check = {'alpha_v', 'alpha_x', 'dt', 'vmax', 'n'};
     epsilon = 1e-6;
     mismatch = false;
     
@@ -165,7 +178,12 @@ if use_parallel
             cfg.params_overrides = struct();
         end
         cfg.params_overrides.use_learned_dynamics = true;
+        cfg.params_overrides.use_prsbc_filter = true;
+        cfg.params_overrides.prsbc_use_nn = true;
         cfg.params_overrides.learned_model = learned_model;
+        cfg.params_overrides.residual_variance = learned_model.residual_variance;
+        cfg.params_overrides.control_noise_std = 0; % 禁用集成评估时的控制噪声
+        cfg.params_overrides.explore_noise_std = 0; % 禁用集成评估时的探索噪声
         
         fprintf('Running Case %03d...\n', cfg.case_id);
 
@@ -242,7 +260,12 @@ else
             cfg.params_overrides = struct();
         end
         cfg.params_overrides.use_learned_dynamics = true;
+        cfg.params_overrides.use_prsbc_filter = true;
+        cfg.params_overrides.prsbc_use_nn = true;
         cfg.params_overrides.learned_model = learned_model;
+        cfg.params_overrides.residual_variance = learned_model.residual_variance;
+        cfg.params_overrides.control_noise_std = 0; % 禁用集成评估时的控制噪声
+        cfg.params_overrides.explore_noise_std = 0; % 禁用集成评估时的探索噪声
         
         fprintf('Running Case %03d... ', cfg.case_id);
 

@@ -44,6 +44,7 @@ end
 manifest = S.manifest;
 
 X = [];
+X_true = [];
 U = [];
 X_next_true = [];
 X_next_nominal = [];
@@ -54,6 +55,7 @@ episode_id = [];
 is_BC_active = [];
 split = {};
 tag = {};
+physical_params = [];
 
 for i = 1:numel(manifest)
     if ~strcmp(manifest(i).status, 'ok'), continue; end
@@ -75,10 +77,14 @@ for i = 1:numel(manifest)
     if ~isfield(T, 'traj'), continue; end
     traj = T.traj;
 
-    [Xi, Ui, Xni_true, Xni_nom, Ri, cid, sid, eid, bc] = trajectory_to_transitions(traj, manifest(i).case_id);
+    [Xi, Xti, Ui, Xni_true, Xni_nom, Ri, cid, sid, eid, bc, p_out] = trajectory_to_transitions(traj, manifest(i).case_id);
+    if isempty(physical_params) && ~isempty(p_out)
+        physical_params = p_out;
+    end
 
     n_i = size(Xi, 1);
     X = [X; Xi];
+    X_true = [X_true; Xti];
     U = [U; Ui];
     X_next_true = [X_next_true; Xni_true];
     X_next_nominal = [X_next_nominal; Xni_nom];
@@ -93,6 +99,7 @@ end
 
 dataset = struct();
 dataset.X = X;
+dataset.X_true = X_true;
 dataset.U = U;
 dataset.X_next_true = X_next_true;
 dataset.X_next_nominal = X_next_nominal;
@@ -114,12 +121,17 @@ save_split(dataset, 'train', export_output_root);
 save_split(dataset, 'val', export_output_root);
 save_split(dataset, 'test', export_output_root);
 
+if ~isempty(physical_params)
+    write_physical_params_json(physical_params, export_output_root);
+end
+
 fprintf('\nExport finished.\n');
 fprintf('All dataset: %s\n', all_file);
 fprintf('Samples total: %d\n', size(dataset.X, 1));
 
-function [X, U, X_next_true, X_next_nominal, R, cid, sid, eid, bc] = trajectory_to_transitions(traj, case_id_value)
+function [X, X_true, U, X_next_true, X_next_nominal, R, cid, sid, eid, bc, p_out] = trajectory_to_transitions(traj, case_id_value)
 params = traj.params;
+p_out = build_physical_params(params);
 if isfield(traj, 'x_obs')
     x_obs = traj.x_obs; y_obs = traj.y_obs; vx_obs = traj.vx_obs; vy_obs = traj.vy_obs;
 else
@@ -136,6 +148,7 @@ end
 T = min([size(x, 1) - 1, size(ax, 1)]);
 
 X = zeros(T, 4 * params.n);
+X_true = zeros(T, 4 * params.n);
 U = zeros(T, 2 * params.n);
 X_next_true = zeros(T, 4 * params.n);
 X_next_nominal = zeros(T, 4 * params.n);
@@ -145,9 +158,10 @@ for k = 1:T
     pos_k_obs = [x_obs(k, :); y_obs(k, :)]; vel_k_obs = [vx_obs(k, :); vy_obs(k, :)];
     pos_k = [x(k, :); y(k, :)]; vel_k = [vx(k, :); vy(k, :)]; acc_k = [ax(k, :); ay(k, :)];
     pos_k1_true = [x(k + 1, :); y(k + 1, :)]; vel_k1_true = [vx(k + 1, :); vy(k + 1, :)];
-    [pos_k1_nom, vel_k1_nom] = dynamics(pos_k, vel_k, acc_k, params);
+    [pos_k1_nom, vel_k1_nom] = nominal_with_alpha(pos_k, vel_k, acc_k, params);
     
     X(k, :) = [pos_k_obs(1, :), pos_k_obs(2, :), vel_k_obs(1, :), vel_k_obs(2, :)];
+    X_true(k, :) = [pos_k(1, :), pos_k(2, :), vel_k(1, :), vel_k(2, :)];
     U(k, :) = [acc_k(1, :), acc_k(2, :)];
     X_next_true(k, :) = [pos_k1_true(1, :), pos_k1_true(2, :), vel_k1_true(1, :), vel_k1_true(2, :)];
     X_next_nominal(k, :) = [pos_k1_nom(1, :), pos_k1_nom(2, :), vel_k1_nom(1, :), vel_k1_nom(2, :)];
@@ -166,11 +180,58 @@ else
 end
 end
 
+function [pos_next, vel_next] = nominal_with_alpha(pos, vel, acc, params)
+dt = params.dt;
+alpha_v = 1.0;
+alpha_x = 1.0;
+if isfield(params, 'alpha_v')
+    alpha_v = params.alpha_v;
+end
+if isfield(params, 'alpha_x')
+    alpha_x = params.alpha_x;
+end
+vel_next = alpha_v .* (vel + acc * dt);
+pos_next = pos + alpha_x .* (vel_next * dt);
+end
+
+function p_out = build_physical_params(params)
+p_out = struct();
+if isfield(params, 'n'), p_out.n = params.n; end
+if isfield(params, 'dt'), p_out.dt = params.dt; end
+if isfield(params, 'vmax'), p_out.vmax = params.vmax; end
+if isfield(params, 'pFactor'), p_out.pFactor = params.pFactor; end
+if isfield(params, 'predator'), p_out.predator = params.predator; end
+if isfield(params, 'alpha_v')
+    p_out.alpha_v = params.alpha_v;
+else
+    p_out.alpha_v = 1.0;
+end
+if isfield(params, 'alpha_x')
+    p_out.alpha_x = params.alpha_x;
+else
+    p_out.alpha_x = 1.0;
+end
+end
+
+function write_physical_params_json(p_struct, output_root)
+json_path = fullfile(output_root, 'physical_params.json');
+json_text = jsonencode(p_struct);
+fid = fopen(json_path, 'w');
+if fid < 0
+    warning('Could not write physical_params.json to %s', output_root);
+    return;
+end
+fwrite(fid, json_text, 'char');
+fclose(fid);
+fprintf('Physical params: %s\n', json_path);
+end
+
 function save_split(dataset, split_name, output_root)
 mask = strcmp(dataset.split, split_name);
 
 split_ds = struct();
 split_ds.X = dataset.X(mask, :);
+split_ds.X_true = dataset.X_true(mask, :);
 split_ds.U = dataset.U(mask, :);
 split_ds.X_next_true = dataset.X_next_true(mask, :);
 split_ds.X_next_nominal = dataset.X_next_nominal(mask, :);

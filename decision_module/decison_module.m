@@ -167,6 +167,7 @@ decision = false;
 result = [];
 
 %% One step sanity check for advanced controller command
+% 模型失配marker
 [is_collision, next_pos, next_vel, r, c, d] = check_next_state(pos, vel, a_ac, params);
 if is_collision
     disp(['[DM] [AC collision] Immediate collision detected between agents ' num2str(r(1)) ' and ' num2str(c(1)) ' with distance ' num2str(d)]);

@@ -43,12 +43,14 @@ end
 %% Dependencies
 SCRIPT_DIR = fileparts(mfilename('fullpath'));
 ROOT_DIR = fullfile(SCRIPT_DIR, '..', '..');
-addpath(genpath(fullfile(ROOT_DIR, 'controllers', 'ac', 'controller_cmpc_2d')));
-addpath(genpath(fullfile(ROOT_DIR, 'controllers', 'bc', 'safety_controller')));
+addpath(genpath(fullfile(ROOT_DIR, 'controllers', 'ac', 'controller_cmpc_2d_quadprog')));
+addpath(genpath(fullfile(ROOT_DIR, 'controllers', 'bc', 'safety_controller_quadprog')));
+addpath(genpath(fullfile(ROOT_DIR, 'controllers', 'PrSBC_filter')));
 addpath(genpath(fullfile(ROOT_DIR, 'decision_module')));
 addpath(genpath(fullfile(ROOT_DIR, 'extended_BBS')));
 addpath(fullfile(ROOT_DIR, 'common'));
-addpath(fullfile(ROOT_DIR, 'experiment', 'dynamics'));
+addpath(genpath(fullfile(ROOT_DIR, 'experiment', 'dynamics')));
+addpath(genpath(fullfile(ROOT_DIR, 'experiment', 'utilities')));
 
 %% params (defaults from main_bb_reverse.m)
 params.n = 15;
@@ -59,7 +61,9 @@ params.h_bc = 10;
 params.steps = 60;
 
 params.amax = 1.5;
+params.a_max = params.amax;
 params.vmax = 2;
+params.v_max = params.vmax;
 
 params.dmin = 1.7;
 
@@ -72,13 +76,28 @@ params.wt = 10;
 params.ws_bb = 3000;
 params.w_orient = 20;
 
+% Safety property
+params.R_safe = 1.9;
+
+% DM & PrSBC safety check parameters
+params.confidence = 0.9;
+params.gamma = 0.4;
+params.sensing_range = 4.0;
+
 % Process and observation noise defaults (aligned with main_bb_reverse.m).
-params.epsilon_w_pos = 0.2 * params.vmax * params.dt;
-params.epsilon_v_pos = 0.2 * params.dmin;
-params.epsilon_v_vel = 0.2 * params.vmax;
+params.epsilon_w_pos = 0.1 * params.vmax * params.dt;
+params.epsilon_v_pos = 0.1 * params.dmin;
+params.epsilon_v_vel = 0.1 * params.vmax;
 params.sigma_obs_pos = params.epsilon_v_pos / 3;
 params.sigma_obs_vel = params.epsilon_v_vel / 3;
 
+% nominal dynamics in controllers and decision module (defaults, can be overridden by cfg.params_overrides)
+% 彻底废弃旧的 acc_scale / damping 等参数，全面拥抱 alpha_v / alpha_x
+params.alpha_v = 0.85;  % 替代之前的 acc_scale 和 damping 的混合效应
+params.alpha_x = 0.9;   % 位置级错配（通常保持1.0，除非需要特殊的几何放大）
+
+% params.noise_std = 0.005;
+% params.control_noise_std = 0; % Optional small action perturbation for exploration cases.
 
 params.predator = 0;
 params.pFactor = 1.40;
@@ -88,11 +107,13 @@ params.wp = 500;
 params = apply_overrides(params, cfg.params_overrides);
 
 %% Optimizer settings
-opt = optimoptions('fmincon');
-opt.Display = 'off';
-opt.MaxIterations = 8000;
-opt.MaxFunctionEvaluations = 12000;
-opt.FunctionTolerance = 1e-7;
+opt = optimoptions('quadprog');
+opt.Algorithm = 'interior-point-convex'; % 显式指定内点法，适合大规模约束
+opt.Display = 'off';                     % 关闭输出，加快仿真速度
+opt.OptimalityTolerance = 1e-6; 
+opt.ConstraintTolerance = 1e-6; % 关键：配合 1e6 的 rho 惩罚项，防止因数值精度报错
+opt.StepTolerance = 1e-10;
+opt.LinearSolver = 'sparse';    % 启用稀疏矩阵求解器，提升计算效率
 
 %% Initial configuration
 [posi, veli, params.tgt] = gen_init_bb(params);
@@ -119,14 +140,14 @@ is_BC_active = false(1, params.steps);
 episode_id = cfg.case_id * ones(1, params.steps);
 
 exit_flag_optimizer = zeros(1, params.steps);
-a_sequence = zeros(params.steps, params.n, 2, params.h_bc + 1);
+a_sequence = zeros(params.steps, params.n, 2, params.h_bc);
 a_ac_traj = zeros(2, params.n, params.steps);
 
 x(1, :) = posi(1, :);
 y(1, :) = posi(2, :);
 vx(1, :) = veli(1, :);
 vy(1, :) = veli(2, :);
-f(1) = fitness(posi, params);
+% f(1) = fitness(posi, params);
 
 bc_counter = 1;
 rslt = [];
@@ -153,10 +174,10 @@ for t = 1:params.steps
     vy_obs(t, :) = hat_vel(2, :);
 
     if mod(t - 1, controller_run) == 0
-        [a_ac, fval, e_flag, ~, ~] = controller_cmpc_2d(hat_pos, hat_vel, params, opt);
+        [a_ac, fval, e_flag, ~, ~] = controller_cmpc_2d_quadprog_soft(hat_pos, hat_vel, params, opt);
 
         [next_pos, next_vel] = next_state(hat_pos, hat_vel, a_ac, params);
-        [~, ~, ~, ~, ~, a_h] = controller_safety_bb(next_pos, next_vel, params, opt);
+        [~, ~, ~, ~, ~, a_h] = controller_safety_bb_quadprog_soft(next_pos, next_vel, params, opt);
 
         [decision, result] = decison_module(hat_pos, hat_vel, params, a_ac, a_h);
 
@@ -205,7 +226,38 @@ for t = 1:params.steps
 
     if mod(t - 1, controller_run) == 0
         acc_des = acc;
-        acc_actual = acc_des;
+    end
+
+    if isfield(params, 'use_prsbc_filter') && params.use_prsbc_filter
+        if ~isfield(params, 'prsbc_use_nn') || ~params.prsbc_use_nn
+            % fprintf('第 %d 步 PrSBC Filter 求解中...\n', t);
+            
+            params.u_cmd = acc; 
+            
+            [acc_safe, ~, filter_exit_flag] = prcbc_filter(pos, vel, params, []);
+            
+            if filter_exit_flag >= 0
+                acc = acc_safe; % 正常微调，应用安全的指令
+            else
+                warning('第 %d 步 PrSBC Filter 求解失败! 维持原指令或采取紧急刹车.', t);
+            end
+        else
+            % fprintf('第 %d 步 nn PrSBC Filter 求解中(NN)...', t);
+
+            params.u_cmd = acc; 
+            
+            [acc_safe, ~, filter_exit_flag] = prcbc_filter_nn(pos, vel, params, []);
+            
+            if filter_exit_flag >= 0
+                acc = acc_safe; % 正常微调，应用安全的指令
+            else
+                warning('第 %d 步 PrSBC Filter 求解失败! 维持原指令或采取紧急刹车.', t);
+            end
+        end 
+    end     
+
+    if mod(t - 1, controller_run) == 0
+        acc_actual = acc;
         if isfield(params, 'control_noise_std') && params.control_noise_std > 0
             acc_actual = acc_actual + params.control_noise_std .* randn(size(acc_actual));
         end
@@ -231,8 +283,8 @@ for t = 1:params.steps
     a_sequence(t + 1, :, :, :) = a_h;
     mpc_cost(t) = fval;
     exit_flag_optimizer(t) = e_flag;
-    f(t + 1) = fitness(pos, params);
-    [~, bb_sp(t + 1), bb_orient(t + 1)] = fitness_bb(pos, vel, params);
+    % f(t + 1) = fitness(pos, params);
+    % [~, bb_sp(t + 1), bb_orient(t + 1)] = fitness_bb(pos, vel, params);
 end
 runtime_s = toc(tStart);
 

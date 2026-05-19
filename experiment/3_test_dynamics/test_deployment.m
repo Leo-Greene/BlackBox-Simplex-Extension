@@ -17,17 +17,24 @@ function test_deployment(custom_test_mat, custom_model_dir)
 %% =========================================================================
 %% 1. 环境准备与路径配置
 %% =========================================================================
-PROJECT_ROOT = 'd:/Coding/Project/CPS/BlackBox-Simplex-Extension';
+PROJECT_ROOT = 'd:/Coding/Project/CPS/PrSBC-BlackBox-Simplex-Extension';
 
 % 创建唯一的报告输出文件夹 (以当前时间戳命名)
 report_timestamp = datestr(now, 'yyyy-mm-dd_HHMMSS');
-TEST_OUT = fullfile(PROJECT_ROOT, 'experiment/test/out', report_timestamp);
+TEST_OUT = fullfile(PROJECT_ROOT, 'experiment/3_test_dynamics/out', report_timestamp);
 if ~exist(TEST_OUT, 'dir'), mkdir(TEST_OUT); end
 
-% 将输出路径和子目录添加到 MATLAB 搜索路径
-addpath(TEST_OUT); 
-addpath(genpath('.')); 
-TRAIN_OUT = fullfile(PROJECT_ROOT, 'experiment/train/out');
+% 将输出路径添加到 MATLAB 搜索路径（优先级最高）
+addpath(TEST_OUT, '-begin');
+% 确保 parfor worker 能找到核心动力学函数
+addpath(fullfile(PROJECT_ROOT, 'experiment/dynamics/learned_dynamics'));
+% 避免根目录旧 residual_net.m 影子覆盖
+root_residual = fullfile(PROJECT_ROOT, 'residual_net.m');
+if exist(root_residual, 'file')
+    warning('Removing shadowing residual_net.m at project root: %s', root_residual);
+    delete(root_residual);
+end
+TRAIN_OUT = fullfile(PROJECT_ROOT, 'experiment/2_train/out');
 
 % 自动寻找最新的模型文件夹 (如果没有手动指定 custom_model_dir)
 if nargin < 2 || isempty(custom_model_dir)
@@ -35,8 +42,8 @@ if nargin < 2 || isempty(custom_model_dir)
     if isempty(d)
         error('在 %s 目录下未找到任何模型文件夹。', TRAIN_OUT);
     end
-    [~, sorted_idx] = sort({d.name});
-    LATEST_MODEL_DIR = fullfile(TRAIN_OUT, d(sorted_idx(end)).name);
+    [~, idx_latest] = max([d.datenum]);
+    LATEST_MODEL_DIR = fullfile(TRAIN_OUT, d(idx_latest).name);
 else
     % 检查指定的路径是否为绝对路径或相对于 TRAIN_OUT 的路径
     if isfolder(custom_model_dir)
@@ -118,15 +125,22 @@ fprintf('--> Evaluating Rollout Consistency...\n');
 if exist(VAL_MAT, 'file')
     % 加载测试集数据
     val_data = load(VAL_MAT); 
-    X_val = val_data.split_ds.X;
+    X_obs = val_data.split_ds.X;
+    if isfield(val_data.split_ds, 'X_true')
+        X_true = val_data.split_ds.X_true;
+    else
+        X_true = X_obs;
+        warning('X_true missing; falling back to X (observed) for nominal/eval.');
+    end
     U_val = val_data.split_ds.U;
     R_label = val_data.split_ds.R_label;
 
     % --- 4.1 数据维度校准 ---
     % 检测数据是 [Dim x Steps] 还是 [Steps x Dim] 并统一为 [Dim x Steps]
     expected_state_dim = 60; % 假设 15 agents * 4 (x,y,vx,vy)
-    if size(X_val, 1) > expected_state_dim && size(X_val, 2) == expected_state_dim
-        X_val = X_val'; 
+    if size(X_obs, 2) == expected_state_dim
+        X_obs = X_obs';
+        X_true = X_true';
         U_val = U_val';
         fprintf('--> Auto-detected Data Transpose. Corrected to [State x Steps].\n');
     end
@@ -138,17 +152,17 @@ if exist(VAL_MAT, 'file')
         case_id = val_data.split_ds.case_id;
         % 找到 case_id 变化的位置
         case_changes = find(case_id(1:end-1) ~= case_id(2:end));
-        boundaries = [0, reshape(case_changes, 1, []), size(X_val, 2)];
+        boundaries = [0, reshape(case_changes, 1, []), size(X_obs, 2)];
     else
         % 如果缺失 case_id，通过位置大幅跳变来启发式检测边界
-        pos_val = X_val(1:30, :); 
+        pos_val = X_obs(1:30, :); 
         dist_sq = sum((pos_val(:, 2:end) - pos_val(:, 1:end-1)).^2, 1);
-        boundaries = [0, reshape(find(dist_sq > 25.0), 1, []), size(X_val, 2)];
+        boundaries = [0, reshape(find(dist_sq > 25.0), 1, []), size(X_obs, 2)];
     end
     
     % --- 4.3 物理参数提取 (重要：确保预测环境与数据一致) ---
     % 从原始轨迹数据中提取 dt, vmax, acc_scale 等参数，这些参数在 dynamics_learned 中被使用
-    num_samples = size(X_val, 2);
+    num_samples = size(X_obs, 2);
     horizon = 10; % 多步预测步长
     results_table = struct('index', {}, 'error_norm', {}, 'avg_dist_err', {}, 'step_errors', {}, 'tag', {}, 'case_id', {});
     
@@ -190,47 +204,65 @@ if exist(VAL_MAT, 'file')
     action_dim = 2 * n_agents;
 
     % --- 4.4 核心循环：多步 Rollout 评估 ---
-    fprintf('--> Starting Full Validation Scan (%d samples)...\n', num_samples);
+    fprintf('--> Starting Full Validation Scan (%d samples) using PARFOR...\n', num_samples);
     scan_step = 1; 
     
-    for i = 1:scan_step:num_samples - horizon
+    % --- 预处理 parfor 需要的变量 ---
+    has_case_id = isfield(val_data.split_ds, 'case_id');
+    if has_case_id
+        case_id_array = val_data.split_ds.case_id;
+    else
+        case_id_array = [];
+    end
+    is_u_transposed = (size(U_val, 1) == action_dim);
+    
+    % 预分配 cell 数组以供并行赋值
+    results_cell = cell(num_samples - horizon, 1);
+    
+    parfor i = 1:scan_step:num_samples - horizon
         % 检查当前滑窗 [i, i+horizon] 是否跨越了轨迹边界
-        if isfield(val_data.split_ds, 'case_id')
-            if val_data.split_ds.case_id(i) ~= val_data.split_ds.case_id(i + horizon)
-                continue;
+        valid_sample = true;
+        if has_case_id
+            if case_id_array(i) ~= case_id_array(i + horizon)
+                valid_sample = false;
             end
         else
             if any(boundaries > i & boundaries <= i + horizon)
-                continue; 
+                valid_sample = false; 
             end
         end
 
-        current_x = double(X_val(:, i));
-        x_start = reshape(current_x, 1, state_dim);
+        if ~valid_sample
+            continue;
+        end
+
+        x_obs_start = reshape(double(X_obs(:, i)), 1, state_dim);
+        x_nom_start = reshape(double(X_true(:, i)), 1, state_dim);
         
         % 获取真实的控制序列输入
-        if size(U_val, 1) == action_dim
+        if is_u_transposed
             u_seq = double(U_val(:, i:i+horizon-1))'; 
         else
             u_seq = double(U_val(i:i+horizon-1, :));
         end
         
         % 执行多步推理
-        x_curr = x_start;
+        x_nom_curr = x_nom_start;
         current_step_errors = zeros(1, horizon);
         for t = 1:horizon
             % 调用 Learned Dynamics (组合了 Nominal 模型与 Neural Residual)
-            [x_next_raw, ~] = dynamics_learned(x_curr, u_seq(t, :), @residual_net, params_onnx, stats, eval_params);
-            x_curr = x_next_raw(1, :);
+            x_obs_curr = reshape(double(X_obs(:, i + t - 1)), 1, state_dim);
+            [x_next_raw, ~] = dynamics_learned(x_nom_curr, x_obs_curr, u_seq(t, :), @residual_net, params_onnx, stats, eval_params);
+            x_nom_curr = x_next_raw(1, :);
             
             % 计算每一时刻的累积 L2 误差
-            x_true_t = double(X_val(:, i + t))'; 
-            current_step_errors(t) = norm(x_curr - x_true_t);
+            x_true_t = double(X_true(:, i + t))'; 
+            current_step_errors(t) = norm(x_nom_curr - x_true_t);
         end
         
         % 计算最终状态误差指标
-        x_true_final = double(X_val(:, i + horizon))';
-        diff = x_curr - x_true_final;
+        x_true_final = double(X_true(:, i + horizon))';
+        diff = x_nom_curr - x_true_final;
         err_norm = norm(diff);
         
         % 解耦位置误差：计算所有 Agent 的平均距离偏移 (单位通常是米)
@@ -239,30 +271,37 @@ if exist(VAL_MAT, 'file')
         avg_dist = mean(sqrt(dx.^2 + dy.^2));
 
         % 缓存结果用于后续分析
+        res = struct();
         res.index = i;
         res.error_norm = err_norm;
         res.avg_dist_err = avg_dist;
         res.step_errors = current_step_errors; 
         res.tag = 'unknown'; 
         res.case_id = 'N/A';
-        results_table(end+1) = res;
+        results_cell{i} = res;
         
         if mod(i, 100) == 0, fprintf('Processed %d/%d...\n', i, num_samples); end
     end
+    
+    % 将 cell 合并为原来的 struct array
+    valid_idx = ~cellfun(@isempty, results_cell);
+    results_table = [results_cell{valid_idx}];
 
     %% =========================================================================
     %% 5. 生成分析报告 (TXT)
     %% =========================================================================
-    [max_err, max_idx] = max([results_table.error_norm]);
+    % 依据多智能体解耦 (Multi-Agent Decoupling) 理念，采用平均距离误差作为最坏情况评判标准
+    [max_dist_err, max_idx] = max([results_table.avg_dist_err]);
     worst_sample = results_table(max_idx);
     
-    [~, min_idx] = min([results_table.error_norm]);
+    [~, min_idx] = min([results_table.avg_dist_err]);
     best_sample = results_table(min_idx);
     
     report_file = fullfile(TEST_OUT, 'error_analysis_report.txt');
     fid = fopen(report_file, 'w');
     fprintf(fid, '====================================================\n');
-    fprintf(fid, '         RESIDUAL MODEL ERROR ANALYSIS REPORT       \n');
+    fprintf(fid, '    BSA RESIDUAL MODEL ERROR ANALYSIS REPORT        \n');
+    fprintf(fid, '    (Multi-Agent Decoupled Architecture 4->4)       \n');
     fprintf(fid, '         Generated on: %s\n', datestr(now));
     fprintf(fid, '         Model:        %s\n', LATEST_MODEL_DIR);
     fprintf(fid, '         Dataset:      %s\n', VAL_MAT);
@@ -270,23 +309,22 @@ if exist(VAL_MAT, 'file')
     
     fprintf(fid, '1. OVERALL STATISTICS (10-Step Rollout):\n');
     fprintf(fid, '   - Total Samples Test:      %d\n', length(results_table));
-    fprintf(fid, '   - Mean L2 Norm Error:      %.6f\n', mean([results_table.error_norm]));
-    fprintf(fid, '   - Median L2 Norm Error:    %.6f\n', median([results_table.error_norm]));
-    fprintf(fid, '   - Max L2 Norm Error:       %.6f (Worst Case)\n', max_err);
-    fprintf(fid, '   - Mean Avg Dist Error:     %.6f m\n\n', mean([results_table.avg_dist_err]));
+    fprintf(fid, '   - Mean Avg Agent Dist Error:   %.6f m\n', mean([results_table.avg_dist_err]));
+    fprintf(fid, '   - Median Avg Agent Dist Error: %.6f m\n', median([results_table.avg_dist_err]));
+    fprintf(fid, '   - Max Avg Agent Dist Error:    %.6f m (Worst Case)\n', max_dist_err);
+    fprintf(fid, '   - Mean Total 60D L2 Norm:      %.6f (Legacy Metric)\n\n', mean([results_table.error_norm]));
     
     fprintf(fid, '2. WORST CASE DETAIL:\n');
     fprintf(fid, '   - Sample Index in Test Set: %d\n', worst_sample.index);
-    fprintf(fid, '   - L2 Norm Error:           %.6f\n', worst_sample.error_norm);
     fprintf(fid, '   - Avg Agent Dist Error:    %.6f m\n', worst_sample.avg_dist_err);
+    fprintf(fid, '   - Total 60D L2 Norm:       %.6f\n', worst_sample.error_norm);
     
     % 记录生成该数据集时的物理不一致性参数 (即 Ground Truth)
     if origin_found
-        fprintf(fid, '   - Physical Discrepancy (Ground Truth Settings):\n');
+        fprintf(fid, '   - Physical Discrepancy (Nominal Mismatch Parameters):\n');
         try
-            if isfield(eval_params, 'acc_scale'), fprintf(fid, '       * acc_scale: %.3f (Nominal: 1.000)\n', eval_params.acc_scale); end
-            if isfield(eval_params, 'damping'),   fprintf(fid, '       * damping:   %.3f\n', eval_params.damping); end
-            if isfield(eval_params, 'vmax'),      fprintf(fid, '       * vmax:      %.3f\n', eval_params.vmax); end
+            if isfield(eval_params, 'alpha_v'),   fprintf(fid, '       * alpha_v:   %.3f\n', eval_params.alpha_v); end
+            if isfield(eval_params, 'alpha_x'),   fprintf(fid, '       * alpha_x:   %.3f\n', eval_params.alpha_x); end
             if isfield(eval_params, 'dt'),        fprintf(fid, '       * dt:        %.3f\n', eval_params.dt); end
             if isfield(eval_params, 'n'),         fprintf(fid, '       * n_agents:  %d\n', eval_params.n); end
         catch
@@ -295,17 +333,17 @@ if exist(VAL_MAT, 'file')
     end
     fprintf(fid, '   - Suggestion: If error is high, check boundary collision frequency.\n\n');
     
-    fprintf(fid, '3. ERROR DISTRIBUTION (L2 Norm Range):\n');
-    % 使用直方图分桶展示误差分布
-    edges = [0, 0.5, 1, 2, 5, 10, 50];
-    counts = histcounts([results_table.error_norm], edges);
+    fprintf(fid, '3. ERROR DISTRIBUTION (Avg Agent Dist Error Range):\n');
+    % 使用直方图分桶展示误差分布 (单位: 米)
+    edges = [0, 0.05, 0.1, 0.2, 0.5, 1.0, 5.0];
+    counts = histcounts([results_table.avg_dist_err], edges);
     for k = 1:length(counts)
-        fprintf(fid, '   - [%.1f - %.1f]: %d samples\n', edges(k), edges(k+1), counts(k));
+        fprintf(fid, '   - [%.2f - %.2f] m: %d samples\n', edges(k), edges(k+1), counts(k));
     end
     
     fclose(fid);
     fprintf('\n--> REPORT GENERATED: %s\n', report_file);
-    fprintf('Worst Case Sample Index: %d, Final Error (L2): %.6f\n', worst_sample.index, max_err);
+    fprintf('Worst Case Sample Index: %d, Max Avg Dist Error: %.6f m\n', worst_sample.index, max_dist_err);
 
     %% =========================================================================
     %% 6. 数据可视化分析
@@ -329,12 +367,12 @@ if exist(VAL_MAT, 'file')
     avg_vel_horizon = NaN(num_samples, 1);
     for i = 1:num_samples - horizon
         % 计算该时段内所有 agent 的平均速度
-        if size(X_val, 2) == state_dim
-            vx_horizon = double(X_val(i:i+horizon-1, 2*n_agents+1:3*n_agents));
-            vy_horizon = double(X_val(i:i+horizon-1, 3*n_agents+1:4*n_agents));
+        if size(X_true, 2) == state_dim
+            vx_horizon = double(X_true(i:i+horizon-1, 2*n_agents+1:3*n_agents));
+            vy_horizon = double(X_true(i:i+horizon-1, 3*n_agents+1:4*n_agents));
         else
-            vx_horizon = double(X_val(2*n_agents+1:3*n_agents, i:i+horizon-1))';
-            vy_horizon = double(X_val(3*n_agents+1:4*n_agents, i:i+horizon-1))';
+            vx_horizon = double(X_true(2*n_agents+1:3*n_agents, i:i+horizon-1))';
+            vy_horizon = double(X_true(3*n_agents+1:4*n_agents, i:i+horizon-1))';
         end
         % vx_horizon is [horizon x n_agents]
         vel_mags = sqrt(vx_horizon.^2 + vy_horizon.^2);
@@ -386,12 +424,12 @@ if exist(VAL_MAT, 'file')
     % --- 子图 4: 位置特征 (离中心的距离) ---
     dist_to_center = zeros(num_samples, 1);
     for k = 1:num_samples
-        if size(X_val, 2) == state_dim
-            px = double(X_val(k, 1:n_agents));
-            py = double(X_val(k, n_agents+1:2*n_agents));
+        if size(X_true, 2) == state_dim
+            px = double(X_true(k, 1:n_agents));
+            py = double(X_true(k, n_agents+1:2*n_agents));
         else
-            px = double(X_val(1:n_agents, k));
-            py = double(X_val(n_agents+1:2*n_agents, k));
+            px = double(X_true(1:n_agents, k));
+            py = double(X_true(n_agents+1:2*n_agents, k));
         end
         dist_to_center(k) = mean(sqrt(px.^2 + py.^2));
     end
@@ -453,24 +491,25 @@ if exist(VAL_MAT, 'file')
     %% 6.3 绘图：最差情况 (Worst Case) 真实轨迹 vs 预测轨迹对比
     % 重新模拟最差情况，便于获取完整轨迹
     idx_worst = worst_sample.index;
-    x_start_worst = X_val(:, idx_worst);
+    x_start_worst = X_true(:, idx_worst);
     if size(U_val, 1) == action_dim
         u_seq_worst = double(U_val(:, idx_worst:idx_worst+horizon-1))'; 
     else
         u_seq_worst = double(U_val(idx_worst:idx_worst+horizon-1, :));
     end
 
-    x_curr = reshape(x_start_worst, 1, state_dim);
+    x_nom_curr = reshape(x_start_worst, 1, state_dim);
     pred_traj = zeros(horizon + 1, state_dim);
-    pred_traj(1, :) = x_curr;
+    pred_traj(1, :) = x_nom_curr;
 
     for t = 1:horizon
-        [x_next_raw, ~] = dynamics_learned(x_curr, u_seq_worst(t, :), @residual_net, params_onnx, stats, eval_params);
-        x_curr = x_next_raw(1, :);
-        pred_traj(t+1, :) = x_curr;
+        x_obs_curr = reshape(double(X_obs(:, idx_worst + t - 1)), 1, state_dim);
+        [x_next_raw, ~] = dynamics_learned(x_nom_curr, x_obs_curr, u_seq_worst(t, :), @residual_net, params_onnx, stats, eval_params);
+        x_nom_curr = x_next_raw(1, :);
+        pred_traj(t+1, :) = x_nom_curr;
     end
 
-    true_traj = double(X_val(:, idx_worst:idx_worst+horizon))'; % [horizon+1 x state_dim]
+    true_traj = double(X_true(:, idx_worst:idx_worst+horizon))'; % [horizon+1 x state_dim]
 
     figure('Name', 'Worst Case Trajectory Comparison', 'Visible', 'off');
     set(gcf, 'Position', [100, 100, 800, 800]);
@@ -511,24 +550,25 @@ if exist(VAL_MAT, 'file')
     %% 6.4 绘图：最好情况 (Best Case) 真实轨迹 vs 预测轨迹对比
     % 重新模拟最好情况 (误差最小的样本)
     idx_best = best_sample.index;
-    x_start_best = X_val(:, idx_best);
+    x_start_best = X_true(:, idx_best);
     if size(U_val, 1) == action_dim
         u_seq_best = double(U_val(:, idx_best:idx_best+horizon-1))'; 
     else
         u_seq_best = double(U_val(idx_best:idx_best+horizon-1, :));
     end
 
-    x_curr = reshape(x_start_best, 1, state_dim);
+    x_nom_curr = reshape(x_start_best, 1, state_dim);
     pred_traj_best = zeros(horizon + 1, state_dim);
-    pred_traj_best(1, :) = x_curr;
+    pred_traj_best(1, :) = x_nom_curr;
 
     for t = 1:horizon
-        [x_next_raw, ~] = dynamics_learned(x_curr, u_seq_best(t, :), @residual_net, params_onnx, stats, eval_params);
-        x_curr = x_next_raw(1, :);
-        pred_traj_best(t+1, :) = x_curr;
+        x_obs_curr = reshape(double(X_obs(:, idx_best + t - 1)), 1, state_dim);
+        [x_next_raw, ~] = dynamics_learned(x_nom_curr, x_obs_curr, u_seq_best(t, :), @residual_net, params_onnx, stats, eval_params);
+        x_nom_curr = x_next_raw(1, :);
+        pred_traj_best(t+1, :) = x_nom_curr;
     end
 
-    true_traj_best = double(X_val(:, idx_best:idx_best+horizon))'; % [horizon+1 x state_dim]
+    true_traj_best = double(X_true(:, idx_best:idx_best+horizon))'; % [horizon+1 x state_dim]
 
     figure('Name', 'Best Case Trajectory Comparison', 'Visible', 'off');
     set(gcf, 'Position', [200, 200, 800, 800]);

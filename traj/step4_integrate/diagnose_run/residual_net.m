@@ -60,8 +60,8 @@ function [residual, state] = residual_net(input_state, input_action, params, var
 % INPUT_STATE, INPUT_ACTION
 %			- Input(s) to the ONNX network.
 %			  The input size(s) expected by the ONNX file are:
-%				  INPUT_STATE:		[1, 60]				Type: FLOAT
-%				  INPUT_ACTION:		[1, 30]				Type: FLOAT
+%				  INPUT_STATE:		[1, 2]				Type: FLOAT
+%				  INPUT_ACTION:		[1, 2]				Type: FLOAT
 %			  By default, the function will try to permute the input(s)
 %			  into this dimension ordering. If the default is incorrect,
 %			  use the 'InputDataPermutation' argument to control the
@@ -76,7 +76,7 @@ function [residual, state] = residual_net(input_state, input_action, params, var
 % RESIDUAL
 %			- Output(s) of the ONNX network.
 %			  Without permutation, the size(s) of the outputs are:
-%				  RESIDUAL:		[1, 60]				Type: FLOAT
+%				  RESIDUAL:		[1, 4]				Type: FLOAT
 %			  By default, the function will try to permute the output(s)
 %			  from this dimension ordering into a conventional MATLAB
 %			  ordering. If the default is incorrect, use the
@@ -523,8 +523,8 @@ input_action = makeUnlabeledDlarray(input_action);
 input_state = permuteInputVar(input_state, inputDataPerms{1}, 2);
 input_action = permuteInputVar(input_action, inputDataPerms{2}, 2);
 % Check input size(s):
-checkInputSize(size(input_state), {1 60}, "input_state");
-checkInputSize(size(input_action), {1 30}, "input_action");
+checkInputSize(size(input_state), {1 2}, "input_state");
+checkInputSize(size(input_action), {1 2}, "input_action");
 end
 
 function [residual] = postprocessOutput(residual, outputDataPerms, anyDlarrayInputs, Training, varargin)

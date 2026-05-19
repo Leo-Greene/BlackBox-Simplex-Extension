@@ -139,8 +139,14 @@ x = zeros([params.steps, params.n]);
 y = zeros([params.steps, params.n]);
 vx = zeros([params.steps, params.n]);
 vy = zeros([params.steps, params.n]);
+x_obs = zeros([params.steps, params.n]);
+y_obs = zeros([params.steps, params.n]);
+vx_obs = zeros([params.steps, params.n]);
+vy_obs = zeros([params.steps, params.n]);
 ax = zeros([params.steps+1, params.n]);
 ay = zeros([params.steps+1, params.n]);
+ax_des = zeros([params.steps+1, params.n]);
+ay_des = zeros([params.steps+1, params.n]);
 bd = zeros([params.n, params.steps, params.n]);
 mpc_cost = zeros(1, params.steps);
 % f = zeros(1, params.steps);
@@ -192,6 +198,10 @@ for t = 1:params.steps  % 1) run optimizer 2) update instruction 3) run dynamics
     % % 暂时不考虑噪声，检验决策模块和安全控制器的功能
     % hat_pos = pos;
     % hat_vel = vel;
+    x_obs(t, :) = hat_pos(1, :);
+    y_obs(t, :) = hat_pos(2, :);
+    vx_obs(t, :) = hat_vel(1, :);
+    vy_obs(t, :) = hat_vel(2, :);
     
     if mod(t - 1, controller_run) == 0  % run optimizer every controller_run steps
         
@@ -286,7 +296,14 @@ for t = 1:params.steps  % 1) run optimizer 2) update instruction 3) run dynamics
 %             bc_counter = bc_counter + 1;
 %         end
     else
+        acc_des = [ax_des(t, :); ay_des(t, :)];
         acc = [ax(t, :); ay(t, :)];
+    end
+
+    if mod(t - 1, controller_run) == 0
+        acc_des = acc;
+        % In main, we don't add explore noise by default, but we keep the structure
+        % if someone wants to add noise here later.
     end
 
     % % 1. 将 DM (船长) 选出的名义指令作为期望目标传入 params
@@ -311,6 +328,8 @@ for t = 1:params.steps  % 1) run optimizer 2) update instruction 3) run dynamics
     y(t+1,:) = pos(2,:);
     vx(t+1,:) = vel(1,:);
     vy(t+1,:) = vel(2,:);
+    ax_des(t+1,:) = acc_des(1,:);
+    ay_des(t+1,:) = acc_des(2,:);
     ax(t+1,:) = acc(1,:);
     ay(t+1,:) = acc(2,:);
     a_ac_traj(:, :, t+1) = a_ac;
@@ -332,8 +351,16 @@ traj.x = x;
 traj.y = y;
 traj.vx = vx;
 traj.vy = vy;
+traj.x_obs = x_obs;
+traj.y_obs = y_obs;
+traj.vx_obs = vx_obs;
+traj.vy_obs = vy_obs;
 traj.ax = ax(1:params.steps,:);
 traj.ay = ay(1:params.steps,:);
+traj.ax_des = ax_des(1:params.steps,:);
+traj.ay_des = ay_des(1:params.steps,:);
+traj.ax_applied = ax(2:params.steps+1,:);
+traj.ay_applied = ay(2:params.steps+1,:);
 traj.a_ac = a_ac_traj;
 traj.mpc_cost = mpc_cost;
 traj.fitness = [];
