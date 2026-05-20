@@ -100,7 +100,7 @@ cfg.params_overrides.learned_model = learned_model;
 cfg.params_overrides.residual_variance = residual_variance;
 cfg.params_overrides.control_noise_std = 0; % 禁用测试时的控制噪声！
 cfg.params_overrides.explore_noise_std = 0; % 禁用测试时的探索噪声！
-cfg.params_overrides.verbose = false; % Disable noisy log prints to keep table clean
+cfg.params_overrides.verbose = false; % true时打开启用详细日志输出以诊断filter每一步的状态、网络输出和QP求解器行为
 
 %% 4. Execute Simulation
 fprintf('--> Launching Full 60-Step Simulation...\n');

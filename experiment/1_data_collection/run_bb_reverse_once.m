@@ -172,9 +172,14 @@ vel = veli;
 a_h = 0;
 controller_run = params.ct / params.dt;
 mde = 1;
-
+runtime_diagnostics_printed = false;
 tStart = tic;
 for t = 1:params.steps
+    if ~runtime_diagnostics_printed
+        print_runtime_diagnostics(params);
+        runtime_diagnostics_printed = true;
+    end
+
     for i = 1:params.n
         v_i_pos = params.sigma_obs_pos * randn(2, 1);
         v_i_vel = params.sigma_obs_vel * randn(2, 1);
@@ -428,5 +433,40 @@ if isnumeric(case_id)
     s = sprintf('%03d', case_id);
 else
     s = char(case_id);
+end
+end
+
+function print_runtime_diagnostics(params)
+fprintf('\n==================== Runtime Diagnostics ====================\n');
+fprintf('Simulation runtime branch is using live params from run_bb_reverse_once.\n');
+fprintf('DM / nominal mismatch model enabled: %s\n', yesno(isfield(params, 'alpha_v') || isfield(params, 'alpha_x')));
+if isfield(params, 'alpha_v')
+    fprintf('  alpha_v = %.6f\n', params.alpha_v);
+end
+if isfield(params, 'alpha_x')
+    fprintf('  alpha_x = %.6f\n', params.alpha_x);
+end
+fprintf('PrSBC filter enabled: %s\n', yesno(isfield(params, 'use_prsbc_filter') && params.use_prsbc_filter));
+fprintf('PrSBC NN branch enabled: %s\n', yesno(isfield(params, 'prsbc_use_nn') && params.prsbc_use_nn));
+fprintf('Learned dynamics enabled for residual prediction: %s\n', yesno(isfield(params, 'use_learned_dynamics') && params.use_learned_dynamics));
+fprintf('Residual NN model available: %s\n', yesno(isfield(params, 'learned_model')));
+fprintf('PrSBC Jacobian computed in NN branch: %s\n', yesno(isfield(params, 'use_prsbc_filter') && params.use_prsbc_filter && isfield(params, 'prsbc_use_nn') && params.prsbc_use_nn));
+if isfield(params, 'learned_model')
+    if isfield(params.learned_model, 'residual_variance')
+        fprintf('Residual variance: %.6f\n', params.learned_model.residual_variance);
+    end
+    if isfield(params.learned_model, 'stats') && isfield(params.learned_model.stats, 'X_mean')
+        fprintf('Residual NN stats loaded: X/U/R scaling vectors are present.\n');
+    end
+end
+fprintf('Controller horizon h_ac = %d | safety horizon h_bc = %d | steps = %d\n', params.h_ac, params.h_bc, params.steps);
+fprintf('============================================================\n\n');
+end
+
+function s = yesno(flag)
+if flag
+    s = 'YES';
+else
+    s = 'NO';
 end
 end

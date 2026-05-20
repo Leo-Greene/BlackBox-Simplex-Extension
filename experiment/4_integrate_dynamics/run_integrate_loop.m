@@ -17,6 +17,14 @@ report_timestamp = datestr(now, 'yyyy-mm-dd_HHMMSS');
 RUN_OUT_ROOT = fullfile(PROJECT_ROOT, 'traj', 'step4_integrate', report_timestamp);
 if ~exist(RUN_OUT_ROOT, 'dir'), mkdir(RUN_OUT_ROOT); end
 
+%% 2. 评估配置 Evaluation Configuration
+% 评估模式的设定引用了数据收集时的设定，如果数据收集有变化，此处可能也需要变化
+% 评估模式选择：
+%   'all'       - 评估所有 48 个 Cases (1-48)
+%   'perturbed' - 只评估包含扰动和边界极限的后 18 个 Cases (31-48)
+%   'default'   - 只评估前 30 个默认 Cases (1-30)
+eval_mode = 'perturbed'; 
+
 %% 3. 并行设置 Parallel Setup
 force_parallel = true;
 requested_workers = 0; 
@@ -141,7 +149,35 @@ manifest_mat = fullfile(files(sorted_idx(end)).folder, files(sorted_idx(end)).na
 fprintf('--> Using Case Manifest: %s\n', manifest_mat);
 S = load(manifest_mat);
 manifest = S.manifest;
+if isfield(S, 'cases')
+    cases_info = S.cases;
+else
+    cases_info = [];
+    warning('run_integrate_loop:NoCasesInfo', ...
+        'Cases information (S.cases) is missing from the manifest file! Parameter overrides cannot be loaded.');
+end
+
+% 根据评估配置过滤 Cases (Filter cases according to evaluation mode)
+if strcmp(eval_mode, 'perturbed')
+    fprintf('--> [Config] Filtering to run ONLY perturbed cases (case_id >= 31)...\n');
+    valid_idx = [manifest.case_id] >= 31;
+    manifest = manifest(valid_idx);
+    if ~isempty(cases_info)
+        cases_info = cases_info(valid_idx);
+    end
+elseif strcmp(eval_mode, 'default')
+    fprintf('--> [Config] Filtering to run ONLY default cases (case_id <= 30)...\n');
+    valid_idx = [manifest.case_id] <= 30;
+    manifest = manifest(valid_idx);
+    if ~isempty(cases_info)
+        cases_info = cases_info(valid_idx);
+    end
+end
+
 num_cases = numel(manifest);
+if num_cases == 0
+    error('No cases matched the selected eval_mode: %s', eval_mode);
+end
 
 % Initialize results manifest for data collection
 results_manifest = repmat(struct( ...
@@ -175,10 +211,21 @@ if use_parallel
         cfg.output_root = RUN_OUT_ROOT;
         
         % Core Injection of Neural Network into config overrides
-        if isfield(manifest, 'params_overrides')
+        has_overrides = false;
+        if isfield(manifest, 'params_overrides') && ~isempty(manifest(i).params_overrides)
             cfg.params_overrides = manifest(i).params_overrides;
+            has_overrides = ~isempty(fieldnames(cfg.params_overrides));
+        elseif ~isempty(cases_info) && isfield(cases_info, 'params_overrides') && ~isempty(cases_info(i).params_overrides)
+            cfg.params_overrides = cases_info(i).params_overrides;
+            has_overrides = ~isempty(fieldnames(cfg.params_overrides));
         else
             cfg.params_overrides = struct();
+        end
+        
+        % Check if a perturbation/boundary-focus case (ID > 30) is missing overrides
+        if manifest(i).case_id > 30 && ~has_overrides
+            warning('run_integrate_loop:MissingOverrides', ...
+                'Case %d is a perturbation/boundary case (ID > 30) but no parameter overrides were applied!', manifest(i).case_id);
         end
         cfg.params_overrides.use_learned_dynamics = true;
         cfg.params_overrides.use_prsbc_filter = true;
@@ -257,10 +304,21 @@ else
         cfg.output_root = RUN_OUT_ROOT;
         
         % Core Injection of Neural Network into config overrides
-        if isfield(manifest, 'params_overrides')
+        has_overrides = false;
+        if isfield(manifest, 'params_overrides') && ~isempty(manifest(i).params_overrides)
             cfg.params_overrides = manifest(i).params_overrides;
+            has_overrides = ~isempty(fieldnames(cfg.params_overrides));
+        elseif ~isempty(cases_info) && isfield(cases_info, 'params_overrides') && ~isempty(cases_info(i).params_overrides)
+            cfg.params_overrides = cases_info(i).params_overrides;
+            has_overrides = ~isempty(fieldnames(cfg.params_overrides));
         else
             cfg.params_overrides = struct();
+        end
+        
+        % Check if a perturbation/boundary-focus case (ID > 30) is missing overrides
+        if manifest(i).case_id > 30 && ~has_overrides
+            warning('run_integrate_loop:MissingOverrides', ...
+                'Case %d is a perturbation/boundary case (ID > 30) but no parameter overrides were applied!', manifest(i).case_id);
         end
         cfg.params_overrides.use_learned_dynamics = true;
         cfg.params_overrides.use_prsbc_filter = true;
